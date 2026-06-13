@@ -152,6 +152,22 @@ INICIO:
 
     CALL    CONV_DISPLAYS
 
+    ; Esperar ~1 segundo para que el CP2102 y terminal inicialicen
+    BANKSEL PORTA
+    MOVLW   d'5'
+    MOVWF   TX_IDX
+DELAY_A:
+    CLRF    TX_DATA
+DELAY_B:
+    CLRF    ESTABLE_COUNT
+DELAY_C:
+    DECFSZ  ESTABLE_COUNT, F
+    GOTO    DELAY_C
+    DECFSZ  TX_DATA, F
+    GOTO    DELAY_B
+    DECFSZ  TX_IDX, F
+    GOTO    DELAY_A
+
     ; Mensaje de arranque
     MOVLW   'L'
     CALL    TX_BYTE
