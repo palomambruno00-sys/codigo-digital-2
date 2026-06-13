@@ -1,6 +1,19 @@
 ; ============================================================
 ; Cronómetro de Reacción - PIC16F887 - 4MHz interno
 ; Con transmisión serie asíncrona (UART 9600,8,N,1)
+;
+; Rangos del potenciómetro y categoría del paciente:
+;   Rango 1 – Rojo    (ADC 0-85)    – Persona joven        – límite 500ms
+;   Rango 2 – Verde   (ADC 86-170)  – Adulto mayor/anciano – límite 1000ms
+;   Rango 3 – Amarillo(ADC 171-255) – Paciente post-ACV    – límite 1500ms
+;
+; Mensajes UART al finalizar la prueba (6 combinaciones):
+;   ENVIAR_MSG=1  Rango 1 normal   → "Cat: Joven      | Resultado: Rango psicomotriz normal\r\n"
+;   ENVIAR_MSG=2  Rango 1 excedido → "Cat: Joven      | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+;   ENVIAR_MSG=3  Rango 2 normal   → "Cat: Adulto mayor | Resultado: Rango psicomotriz normal\r\n"
+;   ENVIAR_MSG=4  Rango 2 excedido → "Cat: Adulto mayor | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+;   ENVIAR_MSG=5  Rango 3 normal   → "Cat: Paciente ACV | Resultado: Rango psicomotriz normal\r\n"
+;   ENVIAR_MSG=6  Rango 3 excedido → "Cat: Paciente ACV | Resultado: Rango psicomotriz excedido de tiempo\r\n"
 ; ============================================================
     LIST    P=16F887
     INCLUDE <P16F887.INC>
@@ -15,35 +28,35 @@
         STATUS_TEMP     ; salva STATUS en ISR
 
         ; --- Display ---
-        DISP_DEC        ; patrón 7seg decenas (ya convertido)
-        DISP_UNI        ; patrón 7seg unidades (ya convertido)
+        DISP_DEC        ; patrón 7seg decenas
+        DISP_UNI        ; patrón 7seg unidades
         NUM_DEC         ; valor numérico decenas (0-9)
         NUM_UNI         ; valor numérico unidades (0-9)
-        MUX_FLAG        ; bit0: 0=mostrar decenas, 1=mostrar unidades
+        MUX_FLAG        ; bit0: 0=decenas  1=unidades
 
         ; --- Flags de control ---
-        ; JUGANDO:   0=esperando/terminado  1=cronómetro activo
-        ; TERMINADO: 0=en curso             1=resultado congelado
-        JUGANDO
-        TERMINADO
+        JUGANDO         ; 0=esperando/terminado  1=activo
+        TERMINADO       ; 0=en curso             1=resultado congelado
 
-        ; --- Temporización interna ISR ---
-        TICK_MUX        ; ticks para parpadeo RB1  (umbral 4 = 20ms)
-        TICK_CENTI      ; ticks para centésima     (umbral 2 = 10ms)
+        ; --- Temporización ISR ---
+        TICK_MUX        ; ticks parpadeo RB1 (umbral 4 = 20ms)
+        TICK_CENTI      ; ticks centésima   (umbral 2 = 10ms)
 
         ; --- Cronómetro ---
-        CENTI_COUNT     ; centésimas acumuladas (compara contra LIMITE)
-        LIMITE          ; límite de centésimas del rango elegido
+        CENTI_COUNT     ; centésimas acumuladas
+        LIMITE          ; límite de centésimas del rango
 
         ; --- Estabilidad ADC ---
-        RANGO_PREV      ; rango de la lectura anterior (1/2/3)
-        ESTABLE_COUNT   ; ticks consecutivos con mismo rango (0–200)
+        RANGO_PREV      ; último rango leído (1/2/3)
+        ESTABLE_COUNT   ; ticks consecutivos con mismo rango (0-200)
 
         ; --- UART ---
-        ; ENVIAR_MSG: 0=nada  1=normal (reaccionó a tiempo)
-        ;             2=excedido (tiempo agotado)
+        ; ENVIAR_MSG: 0=nada
+        ;   1=Joven normal        2=Joven excedido
+        ;   3=Adulto mayor normal 4=Adulto mayor excedido
+        ;   5=ACV normal          6=ACV excedido
         ENVIAR_MSG
-        TX_IDX          ; índice para recorrer tabla de cadena
+        TX_IDX          ; índice para recorrer la cadena
         TX_DATA         ; byte temporal de transmisión
     ENDC
 
@@ -58,22 +71,20 @@
 
 ; ============================================================
 ;  TABLA 7 SEGMENTOS (cátodo común)
-;  Segmentos: bit0=a  bit1=b  bit2=c  bit3=d
-;             bit4=e  bit5=f  bit6=g
 ; ============================================================
 TABLA:
     ANDLW   0x0F
     ADDWF   PCL, F
-    RETLW   b'00111111'     ; 0  – abcdef
-    RETLW   b'00000110'     ; 1  – bc
-    RETLW   b'01011011'     ; 2  – abdeg
-    RETLW   b'01001111'     ; 3  – abcdg
-    RETLW   b'01100110'     ; 4  – bcfg
-    RETLW   b'01101101'     ; 5  – acdfg
-    RETLW   b'01111101'     ; 6  – acdefg
-    RETLW   b'00000111'     ; 7  – abc
-    RETLW   b'01111111'     ; 8  – abcdefg
-    RETLW   b'01101111'     ; 9  – abcdfg
+    RETLW   b'00111111'     ; 0
+    RETLW   b'00000110'     ; 1
+    RETLW   b'01011011'     ; 2
+    RETLW   b'01001111'     ; 3
+    RETLW   b'01100110'     ; 4
+    RETLW   b'01101101'     ; 5
+    RETLW   b'01111101'     ; 6
+    RETLW   b'00000111'     ; 7
+    RETLW   b'01111111'     ; 8
+    RETLW   b'01101111'     ; 9
 
 ; ============================================================
 ;  INICIO
@@ -92,10 +103,10 @@ INICIO:
 
     ; Dirección de puertos
     BANKSEL TRISA
-    MOVLW   b'00000100'     ; RA2=entrada(pot), RA0/1/3/4/5=salida
+    MOVLW   b'00000100'     ; RA2=entrada(pot)
     MOVWF   TRISA
     BANKSEL TRISB
-    MOVLW   b'00000001'     ; RB0=entrada(botón), RB1=salida
+    MOVLW   b'00000001'     ; RB0=entrada(botón)
     MOVWF   TRISB
     BANKSEL TRISD
     CLRF    TRISD           ; PORTD todo salida (segmentos)
@@ -113,8 +124,7 @@ INICIO:
     BANKSEL PORTD
     CLRF    PORTD
 
-    ; ADC: Vref=VDD, resultado justificado a la izquierda
-    ; (ADRESH contiene los 8 bits útiles)
+    ; ADC: Vref=VDD, resultado izquierda (ADRESH = 8 bits útiles)
     BANKSEL ADCON1
     CLRF    ADCON1
     BANKSEL ADCON0
@@ -123,19 +133,16 @@ INICIO:
 
     ; Timer0: clock interno, prescaler 1:64
     BANKSEL OPTION_REG
-    MOVLW   b'00000101'
+    MOVLW   b'00000101'     ; INTEDG=0 (RB0 flanco bajada), PS=1:64
     MOVWF   OPTION_REG
-
-    ; Interrupción externa RB0: flanco de bajada
-    ; (INTEDG=0 en OPTION_REG, bit 6 ya vale 0 con la config anterior)
 
     BANKSEL TMR0
     MOVLW   d'178'          ; (256-178)×64µs ≈ 5ms
     MOVWF   TMR0
 
     ; -------------------------------------------------------
-    ; Inicialización USART – 9600 baud, 8 bits, sin paridad
-    ; Fosc=4MHz, BRGH=1: SPBRG = (4.000.000/16/9600)-1 = 25
+    ; USART: 9600 baud, 8 bits, sin paridad
+    ; Fosc=4MHz, BRGH=1: SPBRG = (4000000/16/9600)-1 = 25
     ; -------------------------------------------------------
     BANKSEL SPBRG
     MOVLW   d'25'
@@ -144,7 +151,7 @@ INICIO:
     MOVLW   b'00100100'     ; TXEN=1, BRGH=1, async, 8 bits
     MOVWF   TXSTA
     BANKSEL RCSTA
-    MOVLW   b'10000000'     ; SPEN=1 (habilita módulo serie)
+    MOVLW   b'10000000'     ; SPEN=1
     MOVWF   RCSTA
 
     ; Inicializar variables
@@ -161,12 +168,11 @@ INICIO:
     CLRF    ESTABLE_COUNT
     CLRF    ENVIAR_MSG
 
-    ; Calcular patrones iniciales (muestra 00)
     CALL    CONV_DISPLAYS
 
     ; Habilitar interrupciones: T0IE + INTE + GIE
     BANKSEL INTCON
-    MOVLW   b'10110000'     ; GIE=1, T0IE=1, INTE=1
+    MOVLW   b'10110000'
     MOVWF   INTCON
 
 ; ============================================================
@@ -174,48 +180,77 @@ INICIO:
 ; ============================================================
 LOOP:
     ; -------------------------------------------------------
-    ; Verificar si hay un mensaje UART pendiente de enviar
-    ; (se activa desde la ISR; se procesa aquí para no bloquear
-    ;  la ISR con la espera del registro de desplazamiento TX)
+    ; Despachar mensaje UART pendiente (seteado por la ISR)
+    ; Se procesa aquí, fuera de la ISR, para no bloquear el
+    ; Timer0 durante la espera del registro de desplazamiento.
     ; -------------------------------------------------------
     MOVF    ENVIAR_MSG, F
     BTFSC   STATUS, Z
-    GOTO    LOOP_CONTINUA       ; ENVIAR_MSG=0 → nada que enviar
+    GOTO    LOOP_CONTINUA       ; 0 = nada que enviar
 
     MOVF    ENVIAR_MSG, W
     SUBLW   d'1'
     BTFSS   STATUS, Z
-    GOTO    MSG_EXCEDIDO
-
-    ; ENVIAR_MSG=1 → reaccionó a tiempo
-    CALL    TX_MSG_NORMAL
+    GOTO    CHK_MSG2
+    CALL    TX_JOVEN_NORMAL
     CLRF    ENVIAR_MSG
     GOTO    LOOP_CONTINUA
 
-MSG_EXCEDIDO:
-    ; ENVIAR_MSG=2 → tiempo agotado
-    CALL    TX_MSG_EXCEDIDO
+CHK_MSG2:
+    MOVF    ENVIAR_MSG, W
+    SUBLW   d'2'
+    BTFSS   STATUS, Z
+    GOTO    CHK_MSG3
+    CALL    TX_JOVEN_EXCEDIDO
+    CLRF    ENVIAR_MSG
+    GOTO    LOOP_CONTINUA
+
+CHK_MSG3:
+    MOVF    ENVIAR_MSG, W
+    SUBLW   d'3'
+    BTFSS   STATUS, Z
+    GOTO    CHK_MSG4
+    CALL    TX_ADULTO_NORMAL
+    CLRF    ENVIAR_MSG
+    GOTO    LOOP_CONTINUA
+
+CHK_MSG4:
+    MOVF    ENVIAR_MSG, W
+    SUBLW   d'4'
+    BTFSS   STATUS, Z
+    GOTO    CHK_MSG5
+    CALL    TX_ADULTO_EXCEDIDO
+    CLRF    ENVIAR_MSG
+    GOTO    LOOP_CONTINUA
+
+CHK_MSG5:
+    MOVF    ENVIAR_MSG, W
+    SUBLW   d'5'
+    BTFSS   STATUS, Z
+    GOTO    CHK_MSG6
+    CALL    TX_ACV_NORMAL
+    CLRF    ENVIAR_MSG
+    GOTO    LOOP_CONTINUA
+
+CHK_MSG6:
+    CALL    TX_ACV_EXCEDIDO
     CLRF    ENVIAR_MSG
 
 LOOP_CONTINUA:
-    ; Leer ADC → encender LED → W = rango actual (1/2/3)
-    CALL    LEER_ADC
+    CALL    LEER_ADC            ; W = rango (1/2/3), enciende LED
 
-    ; ¿Terminado? → solo esperar RB0 (ISR lo resetea)
     BTFSC   TERMINADO, 0
     GOTO    LOOP
 
-    ; ¿Jugando? → ISR maneja todo
     BTFSC   JUGANDO, 0
     GOTO    LOOP
 
     ; -------------------------------------------------------
-    ; ESPERANDO: verificar estabilidad del rango
+    ; ESPERANDO: verificar si el rango cambió
     ; -------------------------------------------------------
-    SUBWF   RANGO_PREV, W       ; W = RANGO_PREV - rango_actual
+    SUBWF   RANGO_PREV, W
     BTFSS   STATUS, Z
     GOTO    RANGO_CAMBIO
-
     GOTO    LOOP
 
 RANGO_CAMBIO:
@@ -225,9 +260,7 @@ RANGO_CAMBIO:
     GOTO    LOOP
 
 ; ============================================================
-;  LEER_ADC
-;  Dispara conversión ADC, espera resultado, enciende LED
-;  Retorna rango en W: 1=Rojo  2=Verde  3=Amarillo
+;  LEER_ADC  – retorna rango en W (1/2/3) y enciende LED
 ; ============================================================
 LEER_ADC:
     BANKSEL ADCON0
@@ -237,8 +270,7 @@ WAIT_ADC:
     GOTO    WAIT_ADC
 
     MOVF    ADRESH, W
-
-    SUBLW   d'85'               ; C=1 si W ≤ 85
+    SUBLW   d'85'               ; C=1 si ADC ≤ 85  → Rojo / Joven
     BTFSS   STATUS, C
     GOTO    ADC_VERDE
 
@@ -251,7 +283,7 @@ WAIT_ADC:
 
 ADC_VERDE:
     MOVF    ADRESH, W
-    SUBLW   d'170'              ; C=1 si W ≤ 170
+    SUBLW   d'170'              ; C=1 si ADC ≤ 170 → Verde / Adulto mayor
     BTFSS   STATUS, C
     GOTO    ADC_AMARILLO
 
@@ -262,7 +294,7 @@ ADC_VERDE:
     MOVLW   d'2'
     RETURN
 
-ADC_AMARILLO:
+ADC_AMARILLO:                   ; ADC > 170        → Amarillo / ACV
     BANKSEL PORTA
     BCF     PORTA, 3
     BCF     PORTA, 4
@@ -272,16 +304,15 @@ ADC_AMARILLO:
 
 ; ============================================================
 ;  CARGAR_LIMITE
-;  Rojo    →  50 centésimas =  500 ms
-;  Verde   → 100 centésimas = 1000 ms
-;  Amarillo→ 150 centésimas = 1500 ms
+;  Rojo    →  50 centésimas =  500ms
+;  Verde   → 100 centésimas = 1000ms
+;  Amarillo→ 150 centésimas = 1500ms
 ; ============================================================
 CARGAR_LIMITE:
     MOVF    RANGO_PREV, W
     SUBLW   d'1'
     BTFSS   STATUS, Z
     GOTO    CL_VERDE
-
     MOVLW   d'50'
     MOVWF   LIMITE
     RETURN
@@ -291,7 +322,6 @@ CL_VERDE:
     SUBLW   d'2'
     BTFSS   STATUS, Z
     GOTO    CL_AMARILLO
-
     MOVLW   d'100'
     MOVWF   LIMITE
     RETURN
@@ -353,16 +383,65 @@ ARRANCAR_PRUEBA:
     RETURN
 
 ; ============================================================
-;  TX_BYTE  –  Envía el byte en W por UART
-;  Espera a que el registro de desplazamiento esté libre
-;  (llamar siempre con GIE=1 en segundo plano no importa
-;   porque el módulo USART es independiente del CPU)
+;  SET_ENVIAR_NORMAL
+;  Carga ENVIAR_MSG con 1/3/5 según RANGO_PREV (normal)
+;  Se llama desde la ISR (CONGELAR_TIEMPO)
+; ============================================================
+SET_ENVIAR_NORMAL:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'1'
+    BTFSS   STATUS, Z
+    GOTO    SEN_R2
+    MOVLW   d'1'            ; Joven normal
+    MOVWF   ENVIAR_MSG
+    RETURN
+SEN_R2:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'2'
+    BTFSS   STATUS, Z
+    GOTO    SEN_R3
+    MOVLW   d'3'            ; Adulto mayor normal
+    MOVWF   ENVIAR_MSG
+    RETURN
+SEN_R3:
+    MOVLW   d'5'            ; ACV normal
+    MOVWF   ENVIAR_MSG
+    RETURN
+
+; ============================================================
+;  SET_ENVIAR_EXCEDIDO
+;  Carga ENVIAR_MSG con 2/4/6 según RANGO_PREV (excedido)
+;  Se llama desde la ISR (CHK_LIMITE timeout)
+; ============================================================
+SET_ENVIAR_EXCEDIDO:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'1'
+    BTFSS   STATUS, Z
+    GOTO    SEE_R2
+    MOVLW   d'2'            ; Joven excedido
+    MOVWF   ENVIAR_MSG
+    RETURN
+SEE_R2:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'2'
+    BTFSS   STATUS, Z
+    GOTO    SEE_R3
+    MOVLW   d'4'            ; Adulto mayor excedido
+    MOVWF   ENVIAR_MSG
+    RETURN
+SEE_R3:
+    MOVLW   d'6'            ; ACV excedido
+    MOVWF   ENVIAR_MSG
+    RETURN
+
+; ============================================================
+;  TX_BYTE  –  Envía el byte en W por UART (espera TRMT=1)
 ; ============================================================
 TX_BYTE:
     MOVWF   TX_DATA
 TX_BYTE_WAIT:
     BANKSEL TXSTA
-    BTFSS   TXSTA, TRMT         ; 1 = registro vacío → listo
+    BTFSS   TXSTA, TRMT
     GOTO    TX_BYTE_WAIT
     BANKSEL TXREG
     MOVF    TX_DATA, W
@@ -370,48 +449,100 @@ TX_BYTE_WAIT:
     RETURN
 
 ; ============================================================
-;  TX_MSG_NORMAL
-;  Envía: "Rango psicomotriz normal\r\n"
+;  TX_STRING_LOOP  –  Macro interna reutilizable
+;  Recorre una tabla de cadena (con TX_IDX) hasta null (0x00)
+;  Se usa dentro de cada TX_xxx con su propia etiqueta de loop
 ; ============================================================
-TX_MSG_NORMAL:
-    CLRF    TX_IDX
-TX_NRM_LOOP:
-    MOVF    TX_IDX, W
-    CALL    STR_NORMAL          ; W = carácter en posición TX_IDX
-    ANDLW   0xFF                ; afecta Z
-    BTFSC   STATUS, Z
-    RETURN                      ; null terminator → fin
-    CALL    TX_BYTE
-    INCF    TX_IDX, F
-    GOTO    TX_NRM_LOOP
 
-; ============================================================
-;  TX_MSG_EXCEDIDO
-;  Envía: "Rango psicomotriz excedido de tiempo\r\n"
-; ============================================================
-TX_MSG_EXCEDIDO:
+; --- Rango 1 – Joven – Normal ---
+TX_JOVEN_NORMAL:
     CLRF    TX_IDX
-TX_EXC_LOOP:
+TXJ_NRM_LP:
     MOVF    TX_IDX, W
-    CALL    STR_EXCEDIDO
+    CALL    STR_JOVEN_NORMAL
     ANDLW   0xFF
     BTFSC   STATUS, Z
     RETURN
     CALL    TX_BYTE
     INCF    TX_IDX, F
-    GOTO    TX_EXC_LOOP
+    GOTO    TXJ_NRM_LP
+
+; --- Rango 1 – Joven – Excedido ---
+TX_JOVEN_EXCEDIDO:
+    CLRF    TX_IDX
+TXJ_EXC_LP:
+    MOVF    TX_IDX, W
+    CALL    STR_JOVEN_EXCEDIDO
+    ANDLW   0xFF
+    BTFSC   STATUS, Z
+    RETURN
+    CALL    TX_BYTE
+    INCF    TX_IDX, F
+    GOTO    TXJ_EXC_LP
+
+; --- Rango 2 – Adulto mayor – Normal ---
+TX_ADULTO_NORMAL:
+    CLRF    TX_IDX
+TXA_NRM_LP:
+    MOVF    TX_IDX, W
+    CALL    STR_ADULTO_NORMAL
+    ANDLW   0xFF
+    BTFSC   STATUS, Z
+    RETURN
+    CALL    TX_BYTE
+    INCF    TX_IDX, F
+    GOTO    TXA_NRM_LP
+
+; --- Rango 2 – Adulto mayor – Excedido ---
+TX_ADULTO_EXCEDIDO:
+    CLRF    TX_IDX
+TXA_EXC_LP:
+    MOVF    TX_IDX, W
+    CALL    STR_ADULTO_EXCEDIDO
+    ANDLW   0xFF
+    BTFSC   STATUS, Z
+    RETURN
+    CALL    TX_BYTE
+    INCF    TX_IDX, F
+    GOTO    TXA_EXC_LP
+
+; --- Rango 3 – Paciente ACV – Normal ---
+TX_ACV_NORMAL:
+    CLRF    TX_IDX
+TXACV_NRM_LP:
+    MOVF    TX_IDX, W
+    CALL    STR_ACV_NORMAL
+    ANDLW   0xFF
+    BTFSC   STATUS, Z
+    RETURN
+    CALL    TX_BYTE
+    INCF    TX_IDX, F
+    GOTO    TXACV_NRM_LP
+
+; --- Rango 3 – Paciente ACV – Excedido ---
+TX_ACV_EXCEDIDO:
+    CLRF    TX_IDX
+TXACV_EXC_LP:
+    MOVF    TX_IDX, W
+    CALL    STR_ACV_EXCEDIDO
+    ANDLW   0xFF
+    BTFSC   STATUS, Z
+    RETURN
+    CALL    TX_BYTE
+    INCF    TX_IDX, F
+    GOTO    TXACV_EXC_LP
 
 ; ============================================================
-;  ISR - Rutina de Servicio de Interrupción
+;  ISR
 ; ============================================================
 ISR:
     MOVWF   W_TEMP
     SWAPF   STATUS, W
     MOVWF   STATUS_TEMP
 
-    ; ===========================================================
+    ; -------------------------------------------------------
     ; 1. INTERRUPCIÓN EXTERNA RB0
-    ; ===========================================================
+    ; -------------------------------------------------------
     BANKSEL INTCON
     BTFSS   INTCON, INTF
     GOTO    CHECK_TMR0
@@ -429,23 +560,21 @@ HACER_RESET:
     GOTO    CLEAR_INTF
 
 CONGELAR_TIEMPO:
-    ; El usuario reaccionó a tiempo: detener cronómetro
+    ; Usuario reaccionó dentro del límite → tiempo psicomotriz normal
     CLRF    JUGANDO
     BSF     TERMINADO, 0
     BANKSEL PORTB
     BSF     PORTB, 1            ; RB1 fijo encendido
-    ; Marcar mensaje "normal" para que el loop lo envíe
-    MOVLW   d'1'
-    MOVWF   ENVIAR_MSG
+    CALL    SET_ENVIAR_NORMAL   ; ENVIAR_MSG = 1/3/5 según rango
 
 CLEAR_INTF:
     BANKSEL INTCON
     BCF     INTCON, INTF
     GOTO    FIN_ISR
 
-    ; ===========================================================
+    ; -------------------------------------------------------
     ; 2. INTERRUPCIÓN TIMER0 (~5ms)
-    ; ===========================================================
+    ; -------------------------------------------------------
 CHECK_TMR0:
     BTFSS   INTCON, T0IF
     GOTO    FIN_ISR
@@ -454,9 +583,7 @@ CHECK_TMR0:
     MOVLW   d'178'
     MOVWF   TMR0
 
-    ; -----------------------------------------------------------
-    ; A) MULTIPLEXADO DE DISPLAYS
-    ; -----------------------------------------------------------
+    ; A) MULTIPLEXADO DE DISPLAYS ----------------------------
     BANKSEL PORTA
     BCF     PORTA, 0
     BCF     PORTA, 1
@@ -490,9 +617,7 @@ MUX_UNI:
     BSF     PORTA, 1
     BCF     MUX_FLAG, 0
 
-    ; -----------------------------------------------------------
-    ; B) ESTABILIDAD ADC (solo en espera)
-    ; -----------------------------------------------------------
+    ; B) ESTABILIDAD ADC (solo en espera) -------------------
 LOGICA_ESTABILIDAD:
     MOVF    JUGANDO, F
     BTFSS   STATUS, Z
@@ -503,21 +628,19 @@ LOGICA_ESTABILIDAD:
 
     MOVF    RANGO_PREV, F
     BTFSC   STATUS, Z
-    GOTO    LOGICA_JUEGO
+    GOTO    LOGICA_JUEGO        ; aún no se eligió rango
 
     INCF    ESTABLE_COUNT, F
 
     MOVLW   d'200'
-    SUBWF   ESTABLE_COUNT, W
+    SUBWF   ESTABLE_COUNT, W    ; Z=1 cuando llega a 200 ticks = 1s
     BTFSS   STATUS, Z
     GOTO    LOGICA_JUEGO
 
     CALL    ARRANCAR_PRUEBA
     GOTO    CLEAR_T0IF
 
-    ; -----------------------------------------------------------
-    ; C) LÓGICA DE JUEGO (solo si JUGANDO=1)
-    ; -----------------------------------------------------------
+    ; C) LÓGICA DE JUEGO ------------------------------------
 LOGICA_JUEGO:
     BTFSS   JUGANDO, 0
     GOTO    CLEAR_T0IF
@@ -543,7 +666,6 @@ LOGICA_CENTI:
     GOTO    CLEAR_T0IF
 
     CLRF    TICK_CENTI
-
     INCF    CENTI_COUNT, F
 
     INCF    NUM_UNI, F
@@ -565,9 +687,9 @@ CHK_LIMITE:
     MOVF    LIMITE, W
     SUBWF   CENTI_COUNT, W
     BTFSS   STATUS, Z
-    GOTO    ACT_DISPLAYS
+    GOTO    ACT_DISPLAYS        ; tiempo no agotado → seguir
 
-    ; Tiempo agotado → mostrar "28" y marcar mensaje "excedido"
+    ; Tiempo agotado → muestra "28", congela, avisa por UART
     MOVLW   d'2'
     MOVWF   NUM_DEC
     MOVLW   d'8'
@@ -576,9 +698,7 @@ CHK_LIMITE:
     BSF     TERMINADO, 0
     BANKSEL PORTB
     BSF     PORTB, 1
-    ; Marcar mensaje "excedido" para que el loop lo envíe
-    MOVLW   d'2'
-    MOVWF   ENVIAR_MSG
+    CALL    SET_ENVIAR_EXCEDIDO ; ENVIAR_MSG = 2/4/6 según rango
 
 ACT_DISPLAYS:
     CALL    CONV_DISPLAYS
@@ -595,20 +715,54 @@ FIN_ISR:
     RETFIE
 
 ; ============================================================
-;  TABLAS DE CADENAS (alineadas a página 0x200)
-;  Cada tabla retorna el carácter en la posición W.
-;  Un 0x00 indica fin de cadena.
+;  TABLAS DE CADENAS
 ;
-;  IMPORTANTE: ambas tablas deben caber dentro de una misma
-;  página de 256 palabras (bits PC<7:0>). ORG 0x200 garantiza
-;  que empiecen al inicio de una página limpia.
+;  Regla de seguridad PIC16: toda tabla con ADDWF PCL debe
+;  quedar íntegra dentro de una misma página de 256 palabras.
+;  Se asigna una sub-página de 0x80 palabras a cada tabla
+;  para garantizar que ninguna cruce el límite de página.
+;
+;  Tabla                   ORG      Tamaño máx.
+;  STR_JOVEN_NORMAL        0x200    ≤ 128 palabras  ✓ (≈60)
+;  STR_JOVEN_EXCEDIDO      0x280    ≤ 128 palabras  ✓ (≈74)
+;  STR_ADULTO_NORMAL       0x300    ≤ 128 palabras  ✓ (≈67)
+;  STR_ADULTO_EXCEDIDO     0x380    ≤ 128 palabras  ✓ (≈81)
+;  STR_ACV_NORMAL          0x400    ≤ 128 palabras  ✓ (≈67)
+;  STR_ACV_EXCEDIDO        0x480    ≤ 128 palabras  ✓ (≈81)
 ; ============================================================
-    ORG     0x200
 
-; "Rango psicomotriz normal\r\n" (27 bytes + null)
-STR_NORMAL:
-    ANDLW   0x3F
+; ------------------------------------------------------------
+;  Rango 1 – Joven – Normal
+;  "Cat: Joven | Resultado: Rango psicomotriz normal\r\n"
+; ------------------------------------------------------------
+    ORG     0x200
+STR_JOVEN_NORMAL:
+    ANDLW   0x7F
     ADDWF   PCL, F
+    RETLW   'C'
+    RETLW   'a'
+    RETLW   't'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'J'
+    RETLW   'o'
+    RETLW   'v'
+    RETLW   'e'
+    RETLW   'n'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ':'
+    RETLW   ' '
     RETLW   'R'
     RETLW   'a'
     RETLW   'n'
@@ -633,14 +787,42 @@ STR_NORMAL:
     RETLW   'm'
     RETLW   'a'
     RETLW   'l'
-    RETLW   0x0D        ; \r
-    RETLW   0x0A        ; \n
-    RETLW   0x00        ; fin
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
 
-; "Rango psicomotriz excedido de tiempo\r\n" (39 bytes + null)
-STR_EXCEDIDO:
-    ANDLW   0x3F
+; ------------------------------------------------------------
+;  Rango 1 – Joven – Excedido
+;  "Cat: Joven | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+; ------------------------------------------------------------
+    ORG     0x280
+STR_JOVEN_EXCEDIDO:
+    ANDLW   0x7F
     ADDWF   PCL, F
+    RETLW   'C'
+    RETLW   'a'
+    RETLW   't'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'J'
+    RETLW   'o'
+    RETLW   'v'
+    RETLW   'e'
+    RETLW   'n'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ':'
+    RETLW   ' '
     RETLW   'R'
     RETLW   'a'
     RETLW   'n'
@@ -677,8 +859,300 @@ STR_EXCEDIDO:
     RETLW   'm'
     RETLW   'p'
     RETLW   'o'
-    RETLW   0x0D        ; \r
-    RETLW   0x0A        ; \n
-    RETLW   0x00        ; fin
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
+
+; ------------------------------------------------------------
+;  Rango 2 – Adulto mayor – Normal
+;  "Cat: Adulto mayor | Resultado: Rango psicomotriz normal\r\n"
+; ------------------------------------------------------------
+    ORG     0x300
+STR_ADULTO_NORMAL:
+    ANDLW   0x7F
+    ADDWF   PCL, F
+    RETLW   'C'
+    RETLW   'a'
+    RETLW   't'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'A'
+    RETLW   'd'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'm'
+    RETLW   'a'
+    RETLW   'y'
+    RETLW   'o'
+    RETLW   'r'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'a'
+    RETLW   'n'
+    RETLW   'g'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'p'
+    RETLW   's'
+    RETLW   'i'
+    RETLW   'c'
+    RETLW   'o'
+    RETLW   'm'
+    RETLW   'o'
+    RETLW   't'
+    RETLW   'r'
+    RETLW   'i'
+    RETLW   'z'
+    RETLW   ' '
+    RETLW   'n'
+    RETLW   'o'
+    RETLW   'r'
+    RETLW   'm'
+    RETLW   'a'
+    RETLW   'l'
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
+
+; ------------------------------------------------------------
+;  Rango 2 – Adulto mayor – Excedido
+;  "Cat: Adulto mayor | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+; ------------------------------------------------------------
+    ORG     0x380
+STR_ADULTO_EXCEDIDO:
+    ANDLW   0x7F
+    ADDWF   PCL, F
+    RETLW   'C'
+    RETLW   'a'
+    RETLW   't'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'A'
+    RETLW   'd'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'm'
+    RETLW   'a'
+    RETLW   'y'
+    RETLW   'o'
+    RETLW   'r'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'a'
+    RETLW   'n'
+    RETLW   'g'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'p'
+    RETLW   's'
+    RETLW   'i'
+    RETLW   'c'
+    RETLW   'o'
+    RETLW   'm'
+    RETLW   'o'
+    RETLW   't'
+    RETLW   'r'
+    RETLW   'i'
+    RETLW   'z'
+    RETLW   ' '
+    RETLW   'e'
+    RETLW   'x'
+    RETLW   'c'
+    RETLW   'e'
+    RETLW   'd'
+    RETLW   'i'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'd'
+    RETLW   'e'
+    RETLW   ' '
+    RETLW   't'
+    RETLW   'i'
+    RETLW   'e'
+    RETLW   'm'
+    RETLW   'p'
+    RETLW   'o'
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
+
+; ------------------------------------------------------------
+;  Rango 3 – Paciente ACV – Normal
+;  "Cat: Paciente ACV | Resultado: Rango psicomotriz normal\r\n"
+; ------------------------------------------------------------
+    ORG     0x400
+STR_ACV_NORMAL:
+    ANDLW   0x7F
+    ADDWF   PCL, F
+    RETLW   'C'
+    RETLW   'a'
+    RETLW   't'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'P'
+    RETLW   'a'
+    RETLW   'c'
+    RETLW   'i'
+    RETLW   'e'
+    RETLW   'n'
+    RETLW   't'
+    RETLW   'e'
+    RETLW   ' '
+    RETLW   'A'
+    RETLW   'C'
+    RETLW   'V'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'a'
+    RETLW   'n'
+    RETLW   'g'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'p'
+    RETLW   's'
+    RETLW   'i'
+    RETLW   'c'
+    RETLW   'o'
+    RETLW   'm'
+    RETLW   'o'
+    RETLW   't'
+    RETLW   'r'
+    RETLW   'i'
+    RETLW   'z'
+    RETLW   ' '
+    RETLW   'n'
+    RETLW   'o'
+    RETLW   'r'
+    RETLW   'm'
+    RETLW   'a'
+    RETLW   'l'
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
+
+; ------------------------------------------------------------
+;  Rango 3 – Paciente ACV – Excedido
+;  "Cat: Paciente ACV | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+; ------------------------------------------------------------
+    ORG     0x480
+STR_ACV_EXCEDIDO:
+    ANDLW   0x7F
+    ADDWF   PCL, F
+    RETLW   'C'
+    RETLW   'a'
+    RETLW   't'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'P'
+    RETLW   'a'
+    RETLW   'c'
+    RETLW   'i'
+    RETLW   'e'
+    RETLW   'n'
+    RETLW   't'
+    RETLW   'e'
+    RETLW   ' '
+    RETLW   'A'
+    RETLW   'C'
+    RETLW   'V'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ':'
+    RETLW   ' '
+    RETLW   'R'
+    RETLW   'a'
+    RETLW   'n'
+    RETLW   'g'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'p'
+    RETLW   's'
+    RETLW   'i'
+    RETLW   'c'
+    RETLW   'o'
+    RETLW   'm'
+    RETLW   'o'
+    RETLW   't'
+    RETLW   'r'
+    RETLW   'i'
+    RETLW   'z'
+    RETLW   ' '
+    RETLW   'e'
+    RETLW   'x'
+    RETLW   'c'
+    RETLW   'e'
+    RETLW   'd'
+    RETLW   'i'
+    RETLW   'd'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'd'
+    RETLW   'e'
+    RETLW   ' '
+    RETLW   't'
+    RETLW   'i'
+    RETLW   'e'
+    RETLW   'm'
+    RETLW   'p'
+    RETLW   'o'
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
 
     END
