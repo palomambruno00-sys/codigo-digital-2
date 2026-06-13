@@ -41,10 +41,11 @@
         ESTABLE_COUNT
     ENDC
 
-    ; Banco 0 GPR 0x20-0x21 (solo acceder desde banco 0)
+    ; Banco 0 GPR 0x20-0x22 (solo acceder desde banco 0)
     CBLOCK  0x20
         TX_IDX
         TX_DATA
+        ESTABLE_SEC         ; segundos completos de estabilidad (0-3)
     ENDC
 
 ; ============================================================
@@ -136,6 +137,7 @@ INICIO:
     BANKSEL PORTA
     CLRF    TX_IDX
     CLRF    TX_DATA
+    CLRF    ESTABLE_SEC
     CLRF    NUM_DEC
     CLRF    NUM_UNI
     CLRF    MUX_FLAG
@@ -179,6 +181,7 @@ RANGO_CAMBIO:
     CALL    LEER_ADC
     MOVWF   RANGO_PREV
     CLRF    ESTABLE_COUNT
+    CLRF    ESTABLE_SEC
     GOTO    LOOP
 
 ; ============================================================
@@ -277,6 +280,7 @@ RESET_TOTAL:
     CLRF    TICK_CENTI
     CLRF    TICK_MUX
     CLRF    ESTABLE_COUNT
+    CLRF    ESTABLE_SEC
     CLRF    LIMITE
     CLRF    RANGO_PREV
     BANKSEL PORTB
@@ -590,8 +594,15 @@ LOGICA_ESTABILIDAD:
     GOTO    LOGICA_JUEGO
 
     INCF    ESTABLE_COUNT, F
-    MOVLW   d'200'
+    MOVLW   d'200'           ; 200 × 5ms = 1 segundo
     SUBWF   ESTABLE_COUNT, W
+    BTFSS   STATUS, Z
+    GOTO    LOGICA_JUEGO
+
+    CLRF    ESTABLE_COUNT    ; cumplió 1 seg → sumar segundo
+    INCF    ESTABLE_SEC, F
+    MOVLW   d'3'             ; esperar 3 segundos completos
+    SUBWF   ESTABLE_SEC, W
     BTFSS   STATUS, Z
     GOTO    LOGICA_JUEGO
 
