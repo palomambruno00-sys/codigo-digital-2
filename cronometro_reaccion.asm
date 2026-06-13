@@ -54,7 +54,6 @@
         ; --- UART ---
         TX_IDX          ; índice para recorrer la cadena
         TX_DATA         ; byte temporal de transmisión
-        PAR_TMP         ; acumulador de bits para cálculo de paridad
     ENDC
 
 ; ============================================================
@@ -139,15 +138,13 @@ INICIO:
     MOVWF   TMR0
 
     ; -------------------------------------------------------
-    ; USART: 9600 baud, 8E1 (paridad par por software, 9 bits)
+    ; USART: 9600 baud, 8N1 (8 bits, sin paridad, 1 stop)
     ; Fosc=4MHz, BRGH=1 → SPBRG=(4000000/16/9600)-1=25
-    ; TX9=1 habilita el 9° bit (TX9D) usado como bit de paridad
     ;
     ; ORDEN OBLIGATORIO (datasheet PIC16F887):
-    ;   1) SPBRG  2) RCSTA(SPEN=1)  3) TXSTA(TXEN=1,TX9=1)
-    ; Activar TXEN antes de SPEN impide que el módulo arranque.
+    ;   1) SPBRG  2) RCSTA(SPEN=1)  3) TXSTA(TXEN=1)
     ;
-    ; TERMINAL: configurar a  9600 – 8 – E (par) – 1
+    ; TERMINAL: configurar a  9600 – 8 – N – 1
     ;           RC6 (TX del PIC) → RXD del CP2102
     ;           RC7 (RX del PIC) → TXD del CP2102
     ; -------------------------------------------------------
@@ -157,8 +154,8 @@ INICIO:
     BANKSEL RCSTA               ; paso 2: habilitar serial port
     MOVLW   b'10000000'         ; SPEN=1
     MOVWF   RCSTA
-    BANKSEL TXSTA               ; paso 3: habilitar TX + paridad
-    MOVLW   b'01100100'         ; TX9=1, TXEN=1, BRGH=1, async
+    BANKSEL TXSTA               ; paso 3: habilitar TX
+    MOVLW   b'00100100'         ; TXEN=1, BRGH=1, async, 8 bits
     MOVWF   TXSTA
 
     ; Inicializar variables
@@ -175,7 +172,6 @@ INICIO:
     CLRF    ESTABLE_COUNT
     CLRF    TX_IDX
     CLRF    TX_DATA
-    CLRF    PAR_TMP
 
     CALL    CONV_DISPLAYS
 
@@ -356,48 +352,12 @@ ARRANCAR_PRUEBA:
     RETURN
 
 ; ============================================================
-;  TX_BYTE  –  Envía el byte en W con paridad par (9 bits)
-;
-;  Paridad par: el bit TX9D se elige de forma que el total de
-;  1s en los 9 bits transmitidos sea siempre par.
-;  El PIC16F887 no tiene hardware de paridad; se calcula
-;  contando los bits en 1 del byte y cargando TX9D según sea
-;  necesario para que la cuenta total resulte par.
-;
-;  Cálculo: si la cantidad de 1s en el byte es par → TX9D=0
-;           si la cantidad de 1s es impar             → TX9D=1
-;  Eso se determina con el bit 0 del conteo (LSB).
+;  TX_BYTE  –  Envía el byte en W por UART (8N1)
 ; ============================================================
 TX_BYTE:
     MOVWF   TX_DATA
-
-    ; --- Contar bits en 1 del byte (resultado en PAR_TMP) ---
-    CLRF    PAR_TMP
-    BTFSC   TX_DATA, 0
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 1
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 2
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 3
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 4
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 5
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 6
-    INCF    PAR_TMP, F
-    BTFSC   TX_DATA, 7
-    INCF    PAR_TMP, F
-
-    ; --- Cargar TX9D: 0 si conteo par, 1 si conteo impar ---
-    BANKSEL TXSTA
-    BCF     TXSTA, TX9D         ; asumir paridad = 0 (conteo par)
-    BTFSC   PAR_TMP, 0          ; ¿LSB del conteo = 1? (conteo impar)
-    BSF     TXSTA, TX9D         ;   sí → parity bit = 1 para compensar
-
-    ; --- Esperar shift register vacío y enviar ---
 TX_BYTE_WAIT:
+    BANKSEL TXSTA
     BTFSS   TXSTA, TRMT         ; 1 = shift register vacío → listo
     GOTO    TX_BYTE_WAIT
     BANKSEL TXREG
