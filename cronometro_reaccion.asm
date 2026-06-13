@@ -152,38 +152,6 @@ INICIO:
 
     CALL    CONV_DISPLAYS
 
-    ; Esperar ~1 segundo para que el CP2102 y terminal inicialicen
-    BANKSEL PORTA
-    MOVLW   d'5'
-    MOVWF   TX_IDX
-DELAY_A:
-    CLRF    TX_DATA
-DELAY_B:
-    CLRF    ESTABLE_COUNT
-DELAY_C:
-    DECFSZ  ESTABLE_COUNT, F
-    GOTO    DELAY_C
-    DECFSZ  TX_DATA, F
-    GOTO    DELAY_B
-    DECFSZ  TX_IDX, F
-    GOTO    DELAY_A
-
-    ; Mensaje de arranque
-    MOVLW   'L'
-    CALL    TX_BYTE
-    MOVLW   'I'
-    CALL    TX_BYTE
-    MOVLW   'S'
-    CALL    TX_BYTE
-    MOVLW   'T'
-    CALL    TX_BYTE
-    MOVLW   'O'
-    CALL    TX_BYTE
-    MOVLW   0x0D
-    CALL    TX_BYTE
-    MOVLW   0x0A
-    CALL    TX_BYTE
-
     BANKSEL INTCON
     MOVLW   b'10110000'     ; GIE=1, T0IE=1, INTE=1
     MOVWF   INTCON
@@ -332,6 +300,21 @@ ARRANCAR_PRUEBA:
     CLRF    TICK_CENTI
     CLRF    TICK_MUX
     CALL    CONV_DISPLAYS
+    ; Rango estabilizado: avisar al operador antes de arrancar
+    MOVLW   'L'
+    CALL    TX_BYTE
+    MOVLW   'I'
+    CALL    TX_BYTE
+    MOVLW   'S'
+    CALL    TX_BYTE
+    MOVLW   'T'
+    CALL    TX_BYTE
+    MOVLW   'O'
+    CALL    TX_BYTE
+    MOVLW   0x0D
+    CALL    TX_BYTE
+    MOVLW   0x0A
+    CALL    TX_BYTE
     BSF     JUGANDO, 0
     RETURN
 
