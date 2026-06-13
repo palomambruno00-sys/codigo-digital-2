@@ -19,7 +19,7 @@
     LIST    P=16F887
     INCLUDE <P16F887.INC>
 
-    __CONFIG _CONFIG1, _INTRC_OSC_NOCLKOUT & _WDT_OFF & _PWRTE_OFF & _MCLRE_ON & _LVP_OFF
+    __CONFIG _CONFIG1, _INTRC_OSC_NOCLKOUT & _WDT_OFF & _PWRTE_OFF & _MCLRE_OFF & _LVP_OFF
 
 ; ============================================================
 ;  VARIABLES RAM (banco compartido 0x70 – acceso universal)
