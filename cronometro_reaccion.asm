@@ -241,14 +241,18 @@ ADC_AMARILLO:
     RETURN
 
 ; ============================================================
-;  CARGAR_LIMITE  (unidad = 20ms)
+;  CARGAR_LIMITE  (unidad = 10ms = 1 centésima de segundo)
+;  Display muestra centésimas → valor × 10ms = tiempo real
+;  Rojo     25 × 10ms =  250ms  (joven)
+;  Verde    50 × 10ms =  500ms  (adulto mayor)
+;  Amarillo 75 × 10ms =  750ms  (paciente ACV)
 ; ============================================================
 CARGAR_LIMITE:
     MOVF    RANGO_PREV, W
     SUBLW   d'1'
     BTFSS   STATUS, Z
     GOTO    CL_VERDE
-    MOVLW   d'25'           ; 25 × 20ms = 500ms
+    MOVLW   d'25'           ; 25 × 10ms = 250ms
     MOVWF   LIMITE
     RETURN
 CL_VERDE:
@@ -256,11 +260,11 @@ CL_VERDE:
     SUBLW   d'2'
     BTFSS   STATUS, Z
     GOTO    CL_AMARILLO
-    MOVLW   d'50'           ; 50 × 20ms = 1000ms
+    MOVLW   d'50'           ; 50 × 10ms = 500ms
     MOVWF   LIMITE
     RETURN
 CL_AMARILLO:
-    MOVLW   d'75'           ; 75 × 20ms = 1500ms
+    MOVLW   d'75'           ; 75 × 10ms = 750ms
     MOVWF   LIMITE
     RETURN
 
@@ -588,10 +592,10 @@ LOGICA_JUEGO:
     MOVLW   b'00000010'
     XORWF   PORTB, F
 
-    ; Unidad display cada 4×5ms = 20ms
+    ; Unidad display cada 2×5ms = 10ms (1 centésima de segundo)
 LOGICA_CENTI:
     INCF    TICK_CENTI, F
-    MOVLW   d'4'
+    MOVLW   d'2'
     SUBWF   TICK_CENTI, W
     BTFSS   STATUS, Z
     GOTO    CLEAR_T0IF
