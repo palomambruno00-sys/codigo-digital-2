@@ -41,7 +41,7 @@
 
         ; --- Temporización ISR ---
         TICK_MUX        ; ticks parpadeo RB1 (umbral 4 = 20ms)
-        TICK_CENTI      ; ticks centésima   (umbral 2 = 10ms)
+        TICK_CENTI      ; ticks por unidad display (umbral 4 = 20ms)
 
         ; --- Cronómetro ---
         CENTI_COUNT
@@ -276,13 +276,18 @@ ADC_AMARILLO:
 
 ; ============================================================
 ;  CARGAR_LIMITE
+;  Unidad de display = 20ms  (TICK_CENTI umbral = 4 x 5ms)
+;  Rojo     -> 25 unidades = 25 x 20ms =  500ms  display 00-24
+;  Verde    -> 50 unidades = 50 x 20ms = 1000ms  display 00-49
+;  Amarillo -> 75 unidades = 75 x 20ms = 1500ms  display 00-74
+;  Todos los valores caben en 2 digitos (00-99).
 ; ============================================================
 CARGAR_LIMITE:
     MOVF    RANGO_PREV, W
     SUBLW   d'1'
     BTFSS   STATUS, Z
     GOTO    CL_VERDE
-    MOVLW   d'50'
+    MOVLW   d'25'
     MOVWF   LIMITE
     RETURN
 
@@ -291,12 +296,12 @@ CL_VERDE:
     SUBLW   d'2'
     BTFSS   STATUS, Z
     GOTO    CL_AMARILLO
-    MOVLW   d'100'
+    MOVLW   d'50'
     MOVWF   LIMITE
     RETURN
 
 CL_AMARILLO:
-    MOVLW   d'150'
+    MOVLW   d'75'
     MOVWF   LIMITE
     RETURN
 
@@ -646,10 +651,10 @@ LOGICA_JUEGO:
     MOVLW   b'00000010'
     XORWF   PORTB, F
 
-    ; C2) Centésima cada 2 ticks × 5ms = 10ms
+    ; C2) Unidad de display cada 4 ticks x 5ms = 20ms
 LOGICA_CENTI:
     INCF    TICK_CENTI, F
-    MOVLW   d'2'
+    MOVLW   d'4'
     SUBWF   TICK_CENTI, W
     BTFSS   STATUS, Z
     GOTO    CLEAR_T0IF
