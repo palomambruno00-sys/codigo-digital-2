@@ -7,13 +7,14 @@
 ;   Rango 2 – Verde   (ADC 86-170)  – Adulto mayor/anciano – límite 1000ms
 ;   Rango 3 – Amarillo(ADC 171-255) – Paciente post-ACV    – límite 1500ms
 ;
-; Mensajes UART al finalizar la prueba (6 combinaciones):
-;   ENVIAR_MSG=1  Rango 1 aprobado    → "Joven | Prueba aprobada\r\n"
-;   ENVIAR_MSG=2  Rango 1 desaprobado → "Joven | Prueba desaprobada\r\n"
-;   ENVIAR_MSG=3  Rango 2 aprobado    → "Adulto mayor | Prueba aprobada\r\n"
-;   ENVIAR_MSG=4  Rango 2 desaprobado → "Adulto mayor | Prueba desaprobada\r\n"
-;   ENVIAR_MSG=5  Rango 3 aprobado    → "Paciente ACV | Prueba aprobada\r\n"
-;   ENVIAR_MSG=6  Rango 3 desaprobado → "Paciente ACV | Prueba desaprobada\r\n"
+; Mensajes UART al finalizar la prueba:
+;   Joven       | Prueba aprobada/desaprobada
+;   Adulto mayor| Prueba aprobada/desaprobada
+;   Paciente ACV| Prueba aprobada/desaprobada
+;
+; NOTA: El mensaje se envía desde la ISR en el instante en que
+; termina la prueba. Como GIE=0 durante la ISR, no hay rebote
+; de botón ni Timer0 que interfiera con la transmisión.
 ; ============================================================
     LIST    P=16F887
     INCLUDE <P16F887.INC>
@@ -28,10 +29,10 @@
         STATUS_TEMP     ; salva STATUS en ISR
 
         ; --- Display ---
-        DISP_DEC        ; patrón 7seg decenas
-        DISP_UNI        ; patrón 7seg unidades
-        NUM_DEC         ; valor numérico decenas (0-9)
-        NUM_UNI         ; valor numérico unidades (0-9)
+        DISP_DEC
+        DISP_UNI
+        NUM_DEC
+        NUM_UNI
         MUX_FLAG        ; bit0: 0=decenas  1=unidades
 
         ; --- Flags de control ---
@@ -43,19 +44,14 @@
         TICK_CENTI      ; ticks centésima   (umbral 2 = 10ms)
 
         ; --- Cronómetro ---
-        CENTI_COUNT     ; centésimas acumuladas
-        LIMITE          ; límite de centésimas del rango
+        CENTI_COUNT
+        LIMITE
 
         ; --- Estabilidad ADC ---
-        RANGO_PREV      ; último rango leído (1/2/3)
-        ESTABLE_COUNT   ; ticks consecutivos con mismo rango (0-200)
+        RANGO_PREV
+        ESTABLE_COUNT
 
         ; --- UART ---
-        ; ENVIAR_MSG: 0=nada
-        ;   1=Joven normal        2=Joven excedido
-        ;   3=Adulto mayor normal 4=Adulto mayor excedido
-        ;   5=ACV normal          6=ACV excedido
-        ENVIAR_MSG
         TX_IDX          ; índice para recorrer la cadena
         TX_DATA         ; byte temporal de transmisión
     ENDC
@@ -109,9 +105,9 @@ INICIO:
     MOVLW   b'00000001'     ; RB0=entrada(botón)
     MOVWF   TRISB
     BANKSEL TRISD
-    CLRF    TRISD           ; PORTD todo salida (segmentos)
+    CLRF    TRISD
 
-    ; RC6=TX salida (USART), RC7=RX entrada (no usada)
+    ; RC6=TX salida (USART), RC7=RX entrada
     BANKSEL TRISC
     BCF     TRISC, 6
     BSF     TRISC, 7
@@ -124,7 +120,7 @@ INICIO:
     BANKSEL PORTD
     CLRF    PORTD
 
-    ; ADC: Vref=VDD, resultado izquierda (ADRESH = 8 bits útiles)
+    ; ADC: Vref=VDD, resultado izquierda (ADRESH = 8 bits)
     BANKSEL ADCON1
     CLRF    ADCON1
     BANKSEL ADCON0
@@ -132,8 +128,9 @@ INICIO:
     MOVWF   ADCON0
 
     ; Timer0: clock interno, prescaler 1:64
+    ; INTEDG=0 → RB0 flanco de bajada
     BANKSEL OPTION_REG
-    MOVLW   b'00000101'     ; INTEDG=0 (RB0 flanco bajada), PS=1:64
+    MOVLW   b'00000101'
     MOVWF   OPTION_REG
 
     BANKSEL TMR0
@@ -141,8 +138,8 @@ INICIO:
     MOVWF   TMR0
 
     ; -------------------------------------------------------
-    ; USART: 9600 baud, 8 bits, sin paridad
-    ; Fosc=4MHz, BRGH=1: SPBRG = (4000000/16/9600)-1 = 25
+    ; USART: 9600 baud, 8N1
+    ; Fosc=4MHz, BRGH=1 → SPBRG=(4000000/16/9600)-1=25
     ; -------------------------------------------------------
     BANKSEL SPBRG
     MOVLW   d'25'
@@ -166,7 +163,6 @@ INICIO:
     CLRF    LIMITE
     CLRF    RANGO_PREV
     CLRF    ESTABLE_COUNT
-    CLRF    ENVIAR_MSG
 
     CALL    CONV_DISPLAYS
 
@@ -177,76 +173,19 @@ INICIO:
 
 ; ============================================================
 ;  LOOP PRINCIPAL
+;  Solo lee ADC, enciende LED y espera. Todo lo demás en ISR.
 ; ============================================================
 LOOP:
-    ; -------------------------------------------------------
-    ; Despachar mensaje UART pendiente (seteado por la ISR)
-    ; Se procesa aquí, fuera de la ISR, para no bloquear el
-    ; Timer0 durante la espera del registro de desplazamiento.
-    ; -------------------------------------------------------
-    MOVF    ENVIAR_MSG, F
-    BTFSC   STATUS, Z
-    GOTO    LOOP_CONTINUA       ; 0 = nada que enviar
-
-    MOVF    ENVIAR_MSG, W
-    SUBLW   d'1'
-    BTFSS   STATUS, Z
-    GOTO    CHK_MSG2
-    CALL    TX_JOVEN_NORMAL
-    CLRF    ENVIAR_MSG
-    GOTO    LOOP_CONTINUA
-
-CHK_MSG2:
-    MOVF    ENVIAR_MSG, W
-    SUBLW   d'2'
-    BTFSS   STATUS, Z
-    GOTO    CHK_MSG3
-    CALL    TX_JOVEN_EXCEDIDO
-    CLRF    ENVIAR_MSG
-    GOTO    LOOP_CONTINUA
-
-CHK_MSG3:
-    MOVF    ENVIAR_MSG, W
-    SUBLW   d'3'
-    BTFSS   STATUS, Z
-    GOTO    CHK_MSG4
-    CALL    TX_ADULTO_NORMAL
-    CLRF    ENVIAR_MSG
-    GOTO    LOOP_CONTINUA
-
-CHK_MSG4:
-    MOVF    ENVIAR_MSG, W
-    SUBLW   d'4'
-    BTFSS   STATUS, Z
-    GOTO    CHK_MSG5
-    CALL    TX_ADULTO_EXCEDIDO
-    CLRF    ENVIAR_MSG
-    GOTO    LOOP_CONTINUA
-
-CHK_MSG5:
-    MOVF    ENVIAR_MSG, W
-    SUBLW   d'5'
-    BTFSS   STATUS, Z
-    GOTO    CHK_MSG6
-    CALL    TX_ACV_NORMAL
-    CLRF    ENVIAR_MSG
-    GOTO    LOOP_CONTINUA
-
-CHK_MSG6:
-    CALL    TX_ACV_EXCEDIDO
-    CLRF    ENVIAR_MSG
-
-LOOP_CONTINUA:
     CALL    LEER_ADC            ; W = rango (1/2/3), enciende LED
 
     BTFSC   TERMINADO, 0
-    GOTO    LOOP
+    GOTO    LOOP                ; congelado → esperar RB0
 
     BTFSC   JUGANDO, 0
-    GOTO    LOOP
+    GOTO    LOOP                ; jugando → ISR maneja todo
 
     ; -------------------------------------------------------
-    ; ESPERANDO: verificar si el rango cambió
+    ; ESPERANDO: detectar cambio de rango
     ; -------------------------------------------------------
     SUBWF   RANGO_PREV, W
     BTFSS   STATUS, Z
@@ -270,7 +209,7 @@ WAIT_ADC:
     GOTO    WAIT_ADC
 
     MOVF    ADRESH, W
-    SUBLW   d'85'               ; C=1 si ADC ≤ 85  → Rojo / Joven
+    SUBLW   d'85'
     BTFSS   STATUS, C
     GOTO    ADC_VERDE
 
@@ -283,7 +222,7 @@ WAIT_ADC:
 
 ADC_VERDE:
     MOVF    ADRESH, W
-    SUBLW   d'170'              ; C=1 si ADC ≤ 170 → Verde / Adulto mayor
+    SUBLW   d'170'
     BTFSS   STATUS, C
     GOTO    ADC_AMARILLO
 
@@ -294,7 +233,7 @@ ADC_VERDE:
     MOVLW   d'2'
     RETURN
 
-ADC_AMARILLO:                   ; ADC > 170        → Amarillo / ACV
+ADC_AMARILLO:
     BANKSEL PORTA
     BCF     PORTA, 3
     BCF     PORTA, 4
@@ -304,9 +243,6 @@ ADC_AMARILLO:                   ; ADC > 170        → Amarillo / ACV
 
 ; ============================================================
 ;  CARGAR_LIMITE
-;  Rojo    →  50 centésimas =  500ms
-;  Verde   → 100 centésimas = 1000ms
-;  Amarillo→ 150 centésimas = 1500ms
 ; ============================================================
 CARGAR_LIMITE:
     MOVF    RANGO_PREV, W
@@ -357,7 +293,6 @@ RESET_TOTAL:
     CLRF    ESTABLE_COUNT
     CLRF    LIMITE
     CLRF    RANGO_PREV
-    CLRF    ENVIAR_MSG
     BANKSEL PORTB
     BCF     PORTB, 1
     BANKSEL PORTD
@@ -383,65 +318,15 @@ ARRANCAR_PRUEBA:
     RETURN
 
 ; ============================================================
-;  SET_ENVIAR_NORMAL
-;  Carga ENVIAR_MSG con 1/3/5 según RANGO_PREV (normal)
-;  Se llama desde la ISR (CONGELAR_TIEMPO)
-; ============================================================
-SET_ENVIAR_NORMAL:
-    MOVF    RANGO_PREV, W
-    SUBLW   d'1'
-    BTFSS   STATUS, Z
-    GOTO    SEN_R2
-    MOVLW   d'1'            ; Joven normal
-    MOVWF   ENVIAR_MSG
-    RETURN
-SEN_R2:
-    MOVF    RANGO_PREV, W
-    SUBLW   d'2'
-    BTFSS   STATUS, Z
-    GOTO    SEN_R3
-    MOVLW   d'3'            ; Adulto mayor normal
-    MOVWF   ENVIAR_MSG
-    RETURN
-SEN_R3:
-    MOVLW   d'5'            ; ACV normal
-    MOVWF   ENVIAR_MSG
-    RETURN
-
-; ============================================================
-;  SET_ENVIAR_EXCEDIDO
-;  Carga ENVIAR_MSG con 2/4/6 según RANGO_PREV (excedido)
-;  Se llama desde la ISR (CHK_LIMITE timeout)
-; ============================================================
-SET_ENVIAR_EXCEDIDO:
-    MOVF    RANGO_PREV, W
-    SUBLW   d'1'
-    BTFSS   STATUS, Z
-    GOTO    SEE_R2
-    MOVLW   d'2'            ; Joven excedido
-    MOVWF   ENVIAR_MSG
-    RETURN
-SEE_R2:
-    MOVF    RANGO_PREV, W
-    SUBLW   d'2'
-    BTFSS   STATUS, Z
-    GOTO    SEE_R3
-    MOVLW   d'4'            ; Adulto mayor excedido
-    MOVWF   ENVIAR_MSG
-    RETURN
-SEE_R3:
-    MOVLW   d'6'            ; ACV excedido
-    MOVWF   ENVIAR_MSG
-    RETURN
-
-; ============================================================
-;  TX_BYTE  –  Envía el byte en W por UART (espera TRMT=1)
+;  TX_BYTE  –  Envía el byte en W por UART
+;  Precondición: GIE puede estar en cualquier estado.
+;  TXSTA (banco 1) y TXREG (banco 0) son accedidos con BANKSEL.
 ; ============================================================
 TX_BYTE:
     MOVWF   TX_DATA
 TX_BYTE_WAIT:
     BANKSEL TXSTA
-    BTFSS   TXSTA, TRMT
+    BTFSS   TXSTA, TRMT         ; 1 = shift register vacío → listo
     GOTO    TX_BYTE_WAIT
     BANKSEL TXREG
     MOVF    TX_DATA, W
@@ -449,12 +334,53 @@ TX_BYTE_WAIT:
     RETURN
 
 ; ============================================================
-;  TX_STRING_LOOP  –  Macro interna reutilizable
-;  Recorre una tabla de cadena (con TX_IDX) hasta null (0x00)
-;  Se usa dentro de cada TX_xxx con su propia etiqueta de loop
+;  TX_NORMAL_POR_RANGO
+;  Envía "Categoria | Prueba aprobada\r\n" según RANGO_PREV.
+;  Llamada desde ISR → GIE=0 → no hay rebote posible.
 ; ============================================================
+TX_NORMAL_POR_RANGO:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'1'
+    BTFSS   STATUS, Z
+    GOTO    TNR_R2
+    CALL    TX_JOVEN_NORMAL
+    RETURN
+TNR_R2:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'2'
+    BTFSS   STATUS, Z
+    GOTO    TNR_R3
+    CALL    TX_ADULTO_NORMAL
+    RETURN
+TNR_R3:
+    CALL    TX_ACV_NORMAL
+    RETURN
 
-; --- Rango 1 – Joven – Normal ---
+; ============================================================
+;  TX_EXCEDIDO_POR_RANGO
+;  Envía "Categoria | Prueba desaprobada\r\n" según RANGO_PREV.
+; ============================================================
+TX_EXCEDIDO_POR_RANGO:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'1'
+    BTFSS   STATUS, Z
+    GOTO    TER_R2
+    CALL    TX_JOVEN_EXCEDIDO
+    RETURN
+TER_R2:
+    MOVF    RANGO_PREV, W
+    SUBLW   d'2'
+    BTFSS   STATUS, Z
+    GOTO    TER_R3
+    CALL    TX_ADULTO_EXCEDIDO
+    RETURN
+TER_R3:
+    CALL    TX_ACV_EXCEDIDO
+    RETURN
+
+; ============================================================
+;  Rutinas TX por cadena – recorren la tabla hasta null (0x00)
+; ============================================================
 TX_JOVEN_NORMAL:
     CLRF    TX_IDX
 TXJ_NRM_LP:
@@ -467,7 +393,6 @@ TXJ_NRM_LP:
     INCF    TX_IDX, F
     GOTO    TXJ_NRM_LP
 
-; --- Rango 1 – Joven – Excedido ---
 TX_JOVEN_EXCEDIDO:
     CLRF    TX_IDX
 TXJ_EXC_LP:
@@ -480,7 +405,6 @@ TXJ_EXC_LP:
     INCF    TX_IDX, F
     GOTO    TXJ_EXC_LP
 
-; --- Rango 2 – Adulto mayor – Normal ---
 TX_ADULTO_NORMAL:
     CLRF    TX_IDX
 TXA_NRM_LP:
@@ -493,7 +417,6 @@ TXA_NRM_LP:
     INCF    TX_IDX, F
     GOTO    TXA_NRM_LP
 
-; --- Rango 2 – Adulto mayor – Excedido ---
 TX_ADULTO_EXCEDIDO:
     CLRF    TX_IDX
 TXA_EXC_LP:
@@ -506,7 +429,6 @@ TXA_EXC_LP:
     INCF    TX_IDX, F
     GOTO    TXA_EXC_LP
 
-; --- Rango 3 – Paciente ACV – Normal ---
 TX_ACV_NORMAL:
     CLRF    TX_IDX
 TXACV_NRM_LP:
@@ -519,7 +441,6 @@ TXACV_NRM_LP:
     INCF    TX_IDX, F
     GOTO    TXACV_NRM_LP
 
-; --- Rango 3 – Paciente ACV – Excedido ---
 TX_ACV_EXCEDIDO:
     CLRF    TX_IDX
 TXACV_EXC_LP:
@@ -560,12 +481,13 @@ HACER_RESET:
     GOTO    CLEAR_INTF
 
 CONGELAR_TIEMPO:
-    ; Usuario reaccionó dentro del límite → tiempo psicomotriz normal
+    ; Detener cronómetro y congelar display
     CLRF    JUGANDO
     BSF     TERMINADO, 0
     BANKSEL PORTB
     BSF     PORTB, 1            ; RB1 fijo encendido
-    CALL    SET_ENVIAR_NORMAL   ; ENVIAR_MSG = 1/3/5 según rango
+    ; Enviar mensaje AHORA, mientras GIE=0 (imposible rebote)
+    CALL    TX_NORMAL_POR_RANGO
 
 CLEAR_INTF:
     BANKSEL INTCON
@@ -628,12 +550,12 @@ LOGICA_ESTABILIDAD:
 
     MOVF    RANGO_PREV, F
     BTFSC   STATUS, Z
-    GOTO    LOGICA_JUEGO        ; aún no se eligió rango
+    GOTO    LOGICA_JUEGO
 
     INCF    ESTABLE_COUNT, F
 
     MOVLW   d'200'
-    SUBWF   ESTABLE_COUNT, W    ; Z=1 cuando llega a 200 ticks = 1s
+    SUBWF   ESTABLE_COUNT, W
     BTFSS   STATUS, Z
     GOTO    LOGICA_JUEGO
 
@@ -687,9 +609,9 @@ CHK_LIMITE:
     MOVF    LIMITE, W
     SUBWF   CENTI_COUNT, W
     BTFSS   STATUS, Z
-    GOTO    ACT_DISPLAYS        ; tiempo no agotado → seguir
+    GOTO    ACT_DISPLAYS
 
-    ; Tiempo agotado → muestra "28", congela, avisa por UART
+    ; Tiempo agotado → "28", congelar, enviar desaprobado
     MOVLW   d'2'
     MOVWF   NUM_DEC
     MOVLW   d'8'
@@ -698,7 +620,8 @@ CHK_LIMITE:
     BSF     TERMINADO, 0
     BANKSEL PORTB
     BSF     PORTB, 1
-    CALL    SET_ENVIAR_EXCEDIDO ; ENVIAR_MSG = 2/4/6 según rango
+    ; Enviar mensaje AHORA, mientras GIE=0 (imposible rebote)
+    CALL    TX_EXCEDIDO_POR_RANGO
 
 ACT_DISPLAYS:
     CALL    CONV_DISPLAYS
@@ -717,26 +640,21 @@ FIN_ISR:
 ; ============================================================
 ;  TABLAS DE CADENAS
 ;
-;  Regla de seguridad PIC16: toda tabla con ADDWF PCL debe
-;  quedar íntegra dentro de una misma página de 256 palabras.
-;  Se asigna una sub-página de 0x80 palabras a cada tabla
-;  para garantizar que ninguna cruce el límite de página.
+;  Cada tabla con ADDWF PCL debe estar íntegra dentro de una
+;  misma página de 256 palabras. Se usa ORG en múltiplos de
+;  0x40 (64 palabras) ya que los mensajes cortos caben en ≤40.
 ;
-;  Tabla                   ORG      Tamaño máx.
-;  STR_JOVEN_NORMAL        0x200    ≤ 128 palabras  ✓ (≈60)
-;  STR_JOVEN_EXCEDIDO      0x280    ≤ 128 palabras  ✓ (≈74)
-;  STR_ADULTO_NORMAL       0x300    ≤ 128 palabras  ✓ (≈67)
-;  STR_ADULTO_EXCEDIDO     0x380    ≤ 128 palabras  ✓ (≈81)
-;  STR_ACV_NORMAL          0x400    ≤ 128 palabras  ✓ (≈67)
-;  STR_ACV_EXCEDIDO        0x480    ≤ 128 palabras  ✓ (≈81)
+;  ORG   Tabla                  Tamaño
+;  0x200 STR_JOVEN_NORMAL       ≈28 palabras
+;  0x240 STR_JOVEN_EXCEDIDO     ≈30 palabras
+;  0x280 STR_ADULTO_NORMAL      ≈32 palabras
+;  0x2C0 STR_ADULTO_EXCEDIDO    ≈35 palabras
+;  0x300 STR_ACV_NORMAL         ≈32 palabras
+;  0x340 STR_ACV_EXCEDIDO       ≈35 palabras
 ; ============================================================
 
-; ------------------------------------------------------------
-;  Rango 1 – Joven – Aprobado
-;  "Joven | Prueba aprobada\r\n"
-; ------------------------------------------------------------
     ORG     0x200
-STR_JOVEN_NORMAL:
+STR_JOVEN_NORMAL:           ; "Joven | Prueba aprobada\r\n"
     ANDLW   0x1F
     ADDWF   PCL, F
     RETLW   'J'
@@ -766,12 +684,8 @@ STR_JOVEN_NORMAL:
     RETLW   0x0A
     RETLW   0x00
 
-; ------------------------------------------------------------
-;  Rango 1 – Joven – Desaprobado
-;  "Joven | Prueba desaprobada\r\n"
-; ------------------------------------------------------------
     ORG     0x240
-STR_JOVEN_EXCEDIDO:
+STR_JOVEN_EXCEDIDO:         ; "Joven | Prueba desaprobada\r\n"
     ANDLW   0x1F
     ADDWF   PCL, F
     RETLW   'J'
@@ -804,13 +718,9 @@ STR_JOVEN_EXCEDIDO:
     RETLW   0x0A
     RETLW   0x00
 
-; ------------------------------------------------------------
-;  Rango 2 – Adulto mayor – Aprobado
-;  "Adulto mayor | Prueba aprobada\r\n"
-; ------------------------------------------------------------
     ORG     0x280
-STR_ADULTO_NORMAL:
-    ANDLW   0x1F
+STR_ADULTO_NORMAL:          ; "Adulto mayor | Prueba aprobada\r\n"
+    ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'A'
     RETLW   'd'
@@ -846,12 +756,8 @@ STR_ADULTO_NORMAL:
     RETLW   0x0A
     RETLW   0x00
 
-; ------------------------------------------------------------
-;  Rango 2 – Adulto mayor – Desaprobado
-;  "Adulto mayor | Prueba desaprobada\r\n"
-; ------------------------------------------------------------
     ORG     0x2C0
-STR_ADULTO_EXCEDIDO:
+STR_ADULTO_EXCEDIDO:        ; "Adulto mayor | Prueba desaprobada\r\n"
     ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'A'
@@ -891,13 +797,9 @@ STR_ADULTO_EXCEDIDO:
     RETLW   0x0A
     RETLW   0x00
 
-; ------------------------------------------------------------
-;  Rango 3 – Paciente ACV – Aprobado
-;  "Paciente ACV | Prueba aprobada\r\n"
-; ------------------------------------------------------------
     ORG     0x300
-STR_ACV_NORMAL:
-    ANDLW   0x1F
+STR_ACV_NORMAL:             ; "Paciente ACV | Prueba aprobada\r\n"
+    ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'P'
     RETLW   'a'
@@ -933,12 +835,8 @@ STR_ACV_NORMAL:
     RETLW   0x0A
     RETLW   0x00
 
-; ------------------------------------------------------------
-;  Rango 3 – Paciente ACV – Desaprobado
-;  "Paciente ACV | Prueba desaprobada\r\n"
-; ------------------------------------------------------------
     ORG     0x340
-STR_ACV_EXCEDIDO:
+STR_ACV_EXCEDIDO:           ; "Paciente ACV | Prueba desaprobada\r\n"
     ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'P'
