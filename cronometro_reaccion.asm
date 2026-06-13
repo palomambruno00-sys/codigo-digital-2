@@ -1,20 +1,17 @@
 ; ============================================================
 ; Cronómetro de Reacción - PIC16F887 - 4MHz interno
-; Con transmisión serie asíncrona (UART 9600,8,E,1 – paridad par)
+; UART 9600,8N1
 ;
-; Rangos del potenciómetro y categoría del paciente:
-;   Rango 1 – Rojo    (ADC 0-85)    – Persona joven        – límite 500ms
-;   Rango 2 – Verde   (ADC 86-170)  – Adulto mayor/anciano – límite 1000ms
-;   Rango 3 – Amarillo(ADC 171-255) – Paciente post-ACV    – límite 1500ms
+; Rangos:
+;   Rango 1 – Rojo    (ADC 0-85)    – Joven        – 500ms
+;   Rango 2 – Verde   (ADC 86-170)  – Adulto mayor – 1000ms
+;   Rango 3 – Amarillo(ADC 171-255) – Paciente ACV – 1500ms
 ;
-; Mensajes UART al finalizar la prueba:
-;   Joven       | Prueba aprobada/desaprobada
-;   Adulto mayor| Prueba aprobada/desaprobada
-;   Paciente ACV| Prueba aprobada/desaprobada
-;
-; NOTA: El mensaje se envía desde la ISR en el instante en que
-; termina la prueba. Como GIE=0 durante la ISR, no hay rebote
-; de botón ni Timer0 que interfiera con la transmisión.
+; Flujo:
+;   1) Ajustar potenciómetro → LED indica categoría
+;   2) Mantener rango 1 segundo → cronómetro arranca solo
+;   3) Presionar RB0 durante prueba → display congela + UART mensaje
+;   4) Presionar RB0 congelado → reset
 ; ============================================================
     LIST    P=16F887
     INCLUDE <P16F887.INC>
@@ -22,38 +19,32 @@
     __CONFIG _CONFIG1, _INTRC_OSC_NOCLKOUT & _WDT_OFF & _PWRTE_OFF & _MCLRE_OFF & _LVP_OFF
 
 ; ============================================================
-;  VARIABLES RAM (banco compartido 0x70 – acceso universal)
+;  VARIABLES RAM
 ; ============================================================
+    ; Banco compartido 0x70-0x7F (16 bytes, acceso universal)
     CBLOCK  0x70
-        W_TEMP          ; salva W en ISR
-        STATUS_TEMP     ; salva STATUS en ISR
-
-        ; --- Display ---
+        W_TEMP
+        STATUS_TEMP
+        PCLATH_TEMP         ; salva PCLATH en ISR
         DISP_DEC
         DISP_UNI
         NUM_DEC
         NUM_UNI
-        MUX_FLAG        ; bit0: 0=decenas  1=unidades
-
-        ; --- Flags de control ---
-        JUGANDO         ; 0=esperando/terminado  1=activo
-        TERMINADO       ; 0=en curso             1=resultado congelado
-
-        ; --- Temporización ISR ---
-        TICK_MUX        ; ticks parpadeo RB1 (umbral 4 = 20ms)
-        TICK_CENTI      ; ticks por unidad display (umbral 4 = 20ms)
-
-        ; --- Cronómetro ---
+        MUX_FLAG
+        JUGANDO
+        TERMINADO
+        TICK_MUX
+        TICK_CENTI
         CENTI_COUNT
         LIMITE
-
-        ; --- Estabilidad ADC ---
         RANGO_PREV
         ESTABLE_COUNT
+    ENDC
 
-        ; --- UART ---
-        TX_IDX          ; índice para recorrer la cadena
-        TX_DATA         ; byte temporal de transmisión
+    ; Banco 0 GPR 0x20-0x21 (solo acceder desde banco 0)
+    CBLOCK  0x20
+        TX_IDX
+        TX_DATA
     ENDC
 
 ; ============================================================
@@ -86,18 +77,15 @@ TABLA:
 ;  INICIO
 ; ============================================================
 INICIO:
-    ; Oscilador interno 4MHz
     BANKSEL OSCCON
     MOVLW   b'01100100'
     MOVWF   OSCCON
 
-    ; Solo AN2 analógico, resto digital
     BANKSEL ANSEL
     MOVLW   b'00000100'
     MOVWF   ANSEL
     CLRF    ANSELH
 
-    ; Dirección de puertos
     BANKSEL TRISA
     MOVLW   b'00000100'     ; RA2=entrada(pot)
     MOVWF   TRISA
@@ -107,12 +95,10 @@ INICIO:
     BANKSEL TRISD
     CLRF    TRISD
 
-    ; RC6=TX salida (USART), RC7=RX entrada
     BANKSEL TRISC
-    BCF     TRISC, 6
-    BSF     TRISC, 7
+    BCF     TRISC, 6        ; RC6=TX salida
+    BSF     TRISC, 7        ; RC7=RX entrada
 
-    ; Limpiar salidas
     BANKSEL PORTA
     CLRF    PORTA
     BANKSEL PORTB
@@ -120,45 +106,36 @@ INICIO:
     BANKSEL PORTD
     CLRF    PORTD
 
-    ; ADC: Vref=VDD, resultado izquierda (ADRESH = 8 bits)
     BANKSEL ADCON1
     CLRF    ADCON1
     BANKSEL ADCON0
     MOVLW   b'01001001'     ; Fosc/8, canal AN2, ADC ON
     MOVWF   ADCON0
 
-    ; Timer0: clock interno, prescaler 1:64
-    ; INTEDG=0 → RB0 flanco de bajada
+    ; INTEDG=0 → RB0 flanco bajada; RBPU=0 → pull-ups ON; PS=1:64
     BANKSEL OPTION_REG
     MOVLW   b'00000101'
     MOVWF   OPTION_REG
 
     BANKSEL TMR0
-    MOVLW   d'178'          ; (256-178)×64µs ≈ 5ms
+    MOVLW   d'178'          ; ~5ms
     MOVWF   TMR0
 
-    ; -------------------------------------------------------
-    ; USART: 9600 baud, 8N1 (8 bits, sin paridad, 1 stop)
-    ; Fosc=4MHz, BRGH=1 → SPBRG=(4000000/16/9600)-1=25
-    ;
-    ; ORDEN OBLIGATORIO (datasheet PIC16F887):
-    ;   1) SPBRG  2) RCSTA(SPEN=1)  3) TXSTA(TXEN=1)
-    ;
-    ; TERMINAL: configurar a  9600 – 8 – N – 1
-    ;           RC6 (TX del PIC) → RXD del CP2102
-    ;           RC7 (RX del PIC) → TXD del CP2102
-    ; -------------------------------------------------------
+    ; USART 9600,8N1
     BANKSEL SPBRG
     MOVLW   d'25'
     MOVWF   SPBRG
-    BANKSEL RCSTA               ; paso 2: habilitar serial port
-    MOVLW   b'10000000'         ; SPEN=1
+    BANKSEL RCSTA
+    MOVLW   b'10000000'     ; SPEN=1
     MOVWF   RCSTA
-    BANKSEL TXSTA               ; paso 3: habilitar TX
-    MOVLW   b'00100100'         ; TXEN=1, BRGH=1, async, 8 bits
+    BANKSEL TXSTA
+    MOVLW   b'00100100'     ; TXEN=1, BRGH=1
     MOVWF   TXSTA
 
-    ; Inicializar variables
+    ; Inicializar variables (banco 0 para TX_IDX/TX_DATA)
+    BANKSEL PORTA
+    CLRF    TX_IDX
+    CLRF    TX_DATA
     CLRF    NUM_DEC
     CLRF    NUM_UNI
     CLRF    MUX_FLAG
@@ -170,16 +147,12 @@ INICIO:
     CLRF    LIMITE
     CLRF    RANGO_PREV
     CLRF    ESTABLE_COUNT
-    CLRF    TX_IDX
-    CLRF    TX_DATA
+    CLRF    PCLATH_TEMP
+    CLRF    PCLATH
 
     CALL    CONV_DISPLAYS
 
-    ; -------------------------------------------------------
-    ; Mensaje de arranque – confirma que la UART funciona
-    ; Si ves "LISTO" en el terminal, la UART está OK.
-    ; Si no ves nada, revisar: cableado RC6→RXD, baud 9600 8E1
-    ; -------------------------------------------------------
+    ; Mensaje de arranque
     MOVLW   'L'
     CALL    TX_BYTE
     MOVLW   'I'
@@ -195,27 +168,24 @@ INICIO:
     MOVLW   0x0A
     CALL    TX_BYTE
 
-    ; Habilitar interrupciones: T0IE + INTE + GIE
     BANKSEL INTCON
-    MOVLW   b'10110000'
+    MOVLW   b'10110000'     ; GIE=1, T0IE=1, INTE=1
     MOVWF   INTCON
 
 ; ============================================================
 ;  LOOP PRINCIPAL
-;  Solo lee ADC, enciende LED y espera. Todo lo demás en ISR.
+;  LEER_ADC solo se llama cuando se está esperando (no jugando
+;  ni congelado). Así los LEDs no cambian durante la prueba.
 ; ============================================================
 LOOP:
-    CALL    LEER_ADC            ; W = rango (1/2/3), enciende LED
-
     BTFSC   TERMINADO, 0
-    GOTO    LOOP                ; congelado → esperar RB0
+    GOTO    LOOP            ; congelado → solo esperar IRQ RB0
 
     BTFSC   JUGANDO, 0
-    GOTO    LOOP                ; jugando → ISR maneja todo
+    GOTO    LOOP            ; jugando  → solo esperar IRQ RB0/T0
 
-    ; -------------------------------------------------------
-    ; ESPERANDO: detectar cambio de rango
-    ; -------------------------------------------------------
+    ; ESPERANDO: leer ADC, actualizar LEDs, detectar cambio rango
+    CALL    LEER_ADC        ; W = rango (1/2/3), actualiza LEDs
     SUBWF   RANGO_PREV, W
     BTFSS   STATUS, Z
     GOTO    RANGO_CAMBIO
@@ -271,33 +241,26 @@ ADC_AMARILLO:
     RETURN
 
 ; ============================================================
-;  CARGAR_LIMITE
-;  Unidad de display = 20ms  (TICK_CENTI umbral = 4 x 5ms)
-;  Rojo     -> 25 unidades = 25 x 20ms =  500ms  display 00-24
-;  Verde    -> 50 unidades = 50 x 20ms = 1000ms  display 00-49
-;  Amarillo -> 75 unidades = 75 x 20ms = 1500ms  display 00-74
-;  Todos los valores caben en 2 digitos (00-99).
+;  CARGAR_LIMITE  (unidad = 20ms)
 ; ============================================================
 CARGAR_LIMITE:
     MOVF    RANGO_PREV, W
     SUBLW   d'1'
     BTFSS   STATUS, Z
     GOTO    CL_VERDE
-    MOVLW   d'25'
+    MOVLW   d'25'           ; 25 × 20ms = 500ms
     MOVWF   LIMITE
     RETURN
-
 CL_VERDE:
     MOVF    RANGO_PREV, W
     SUBLW   d'2'
     BTFSS   STATUS, Z
     GOTO    CL_AMARILLO
-    MOVLW   d'50'
+    MOVLW   d'50'           ; 50 × 20ms = 1000ms
     MOVWF   LIMITE
     RETURN
-
 CL_AMARILLO:
-    MOVLW   d'75'
+    MOVLW   d'75'           ; 75 × 20ms = 1500ms
     MOVWF   LIMITE
     RETURN
 
@@ -305,7 +268,7 @@ CL_AMARILLO:
 ;  CONV_DISPLAYS
 ; ============================================================
 CONV_DISPLAYS:
-    CLRF    PCLATH              ; TABLA está en página 0 (0x000-0x0FF)
+    CLRF    PCLATH          ; TABLA está en página 0
     MOVF    NUM_DEC, W
     CALL    TABLA
     MOVWF   DISP_DEC
@@ -353,23 +316,21 @@ ARRANCAR_PRUEBA:
     RETURN
 
 ; ============================================================
-;  TX_BYTE  –  Envía el byte en W por UART (8N1)
+;  TX_BYTE  (banco 0 al entrar y al salir)
 ; ============================================================
 TX_BYTE:
-    MOVWF   TX_DATA
+    MOVWF   TX_DATA         ; TX_DATA en banco 0 (0x21)
 TX_BYTE_WAIT:
     BANKSEL TXSTA
-    BTFSS   TXSTA, TRMT         ; 1 = shift register vacío → listo
+    BTFSS   TXSTA, TRMT
     GOTO    TX_BYTE_WAIT
-    BANKSEL TXREG
+    BANKSEL TXREG           ; vuelve a banco 0
     MOVF    TX_DATA, W
     MOVWF   TXREG
     RETURN
 
 ; ============================================================
-;  TX_NORMAL_POR_RANGO
-;  Envía "Categoria | Prueba aprobada\r\n" según RANGO_PREV.
-;  Llamada desde ISR → GIE=0 → no hay rebote posible.
+;  TX_NORMAL_POR_RANGO / TX_EXCEDIDO_POR_RANGO
 ; ============================================================
 TX_NORMAL_POR_RANGO:
     MOVF    RANGO_PREV, W
@@ -389,10 +350,6 @@ TNR_R3:
     CALL    TX_ACV_NORMAL
     RETURN
 
-; ============================================================
-;  TX_EXCEDIDO_POR_RANGO
-;  Envía "Categoria | Prueba desaprobada\r\n" según RANGO_PREV.
-; ============================================================
 TX_EXCEDIDO_POR_RANGO:
     MOVF    RANGO_PREV, W
     SUBLW   d'1'
@@ -412,11 +369,11 @@ TER_R3:
     RETURN
 
 ; ============================================================
-;  Rutinas TX por cadena – recorren la tabla hasta null (0x00)
+;  Rutinas TX por cadena (PCLATH se configura en cada una)
 ; ============================================================
 TX_JOVEN_NORMAL:
     CLRF    TX_IDX
-    MOVLW   0x02                ; STR_JOVEN_NORMAL está en 0x200 → PCLATH=2
+    MOVLW   0x02
     MOVWF   PCLATH
 TXJ_NRM_LP:
     MOVF    TX_IDX, W
@@ -430,7 +387,7 @@ TXJ_NRM_LP:
 
 TX_JOVEN_EXCEDIDO:
     CLRF    TX_IDX
-    MOVLW   0x02                ; STR_JOVEN_EXCEDIDO está en 0x240 → PCLATH=2
+    MOVLW   0x02
     MOVWF   PCLATH
 TXJ_EXC_LP:
     MOVF    TX_IDX, W
@@ -444,7 +401,7 @@ TXJ_EXC_LP:
 
 TX_ADULTO_NORMAL:
     CLRF    TX_IDX
-    MOVLW   0x02                ; STR_ADULTO_NORMAL está en 0x280 → PCLATH=2
+    MOVLW   0x02
     MOVWF   PCLATH
 TXA_NRM_LP:
     MOVF    TX_IDX, W
@@ -458,7 +415,7 @@ TXA_NRM_LP:
 
 TX_ADULTO_EXCEDIDO:
     CLRF    TX_IDX
-    MOVLW   0x02                ; STR_ADULTO_EXCEDIDO está en 0x2C0 → PCLATH=2
+    MOVLW   0x02
     MOVWF   PCLATH
 TXA_EXC_LP:
     MOVF    TX_IDX, W
@@ -472,7 +429,7 @@ TXA_EXC_LP:
 
 TX_ACV_NORMAL:
     CLRF    TX_IDX
-    MOVLW   0x03                ; STR_ACV_NORMAL está en 0x300 → PCLATH=3
+    MOVLW   0x03
     MOVWF   PCLATH
 TXACV_NRM_LP:
     MOVF    TX_IDX, W
@@ -486,7 +443,7 @@ TXACV_NRM_LP:
 
 TX_ACV_EXCEDIDO:
     CLRF    TX_IDX
-    MOVLW   0x03                ; STR_ACV_EXCEDIDO está en 0x340 → PCLATH=3
+    MOVLW   0x03
     MOVWF   PCLATH
 TXACV_EXC_LP:
     MOVF    TX_IDX, W
@@ -505,6 +462,9 @@ ISR:
     MOVWF   W_TEMP
     SWAPF   STATUS, W
     MOVWF   STATUS_TEMP
+    MOVF    PCLATH, W       ; guardar PCLATH
+    MOVWF   PCLATH_TEMP
+    CLRF    PCLATH          ; asegurar página 0 al inicio de ISR
 
     ; -------------------------------------------------------
     ; 1. INTERRUPCIÓN EXTERNA RB0
@@ -523,10 +483,9 @@ ISR:
 
 HACER_RESET:
     CALL    RESET_TOTAL
-    ; Esperar liberación del botón para absorber rebotes
 WAIT_REL_RST:
     BANKSEL PORTB
-    BTFSS   PORTB, 0
+    BTFSS   PORTB, 0        ; esperar liberación (evita rebote)
     GOTO    WAIT_REL_RST
     GOTO    CLEAR_INTF
 
@@ -534,13 +493,11 @@ CONGELAR_TIEMPO:
     CLRF    JUGANDO
     BSF     TERMINADO, 0
     BANKSEL PORTB
-    BSF     PORTB, 1            ; RB1 fijo encendido
-    ; Enviar mensaje AHORA, mientras GIE=0 (imposible rebote)
+    BSF     PORTB, 1        ; RB1 fijo encendido
     CALL    TX_NORMAL_POR_RANGO
-    ; Esperar liberación del botón para absorber rebotes
 WAIT_REL_JUG:
     BANKSEL PORTB
-    BTFSS   PORTB, 0
+    BTFSS   PORTB, 0        ; esperar liberación (evita rebote)
     GOTO    WAIT_REL_JUG
 
 CLEAR_INTF:
@@ -559,7 +516,7 @@ CHECK_TMR0:
     MOVLW   d'178'
     MOVWF   TMR0
 
-    ; A) MULTIPLEXADO DE DISPLAYS ----------------------------
+    ; A) Multiplexado de displays
     BANKSEL PORTA
     BCF     PORTA, 0
     BCF     PORTA, 1
@@ -593,7 +550,7 @@ MUX_UNI:
     BSF     PORTA, 1
     BCF     MUX_FLAG, 0
 
-    ; B) ESTABILIDAD ADC (solo en espera) -------------------
+    ; B) Estabilidad ADC (solo en espera)
 LOGICA_ESTABILIDAD:
     MOVF    JUGANDO, F
     BTFSS   STATUS, Z
@@ -607,7 +564,6 @@ LOGICA_ESTABILIDAD:
     GOTO    LOGICA_JUEGO
 
     INCF    ESTABLE_COUNT, F
-
     MOVLW   d'200'
     SUBWF   ESTABLE_COUNT, W
     BTFSS   STATUS, Z
@@ -616,24 +572,23 @@ LOGICA_ESTABILIDAD:
     CALL    ARRANCAR_PRUEBA
     GOTO    CLEAR_T0IF
 
-    ; C) LÓGICA DE JUEGO ------------------------------------
+    ; C) Lógica de juego
 LOGICA_JUEGO:
     BTFSS   JUGANDO, 0
     GOTO    CLEAR_T0IF
 
-    ; C1) Parpadeo RB1 cada 4 ticks × 5ms = 20ms
+    ; Parpadeo RB1 cada 4×5ms = 20ms
     INCF    TICK_MUX, F
     MOVLW   d'4'
     SUBWF   TICK_MUX, W
     BTFSS   STATUS, Z
     GOTO    LOGICA_CENTI
-
     CLRF    TICK_MUX
     BANKSEL PORTB
     MOVLW   b'00000010'
     XORWF   PORTB, F
 
-    ; C2) Unidad de display cada 4 ticks x 5ms = 20ms
+    ; Unidad display cada 4×5ms = 20ms
 LOGICA_CENTI:
     INCF    TICK_CENTI, F
     MOVLW   d'4'
@@ -649,14 +604,12 @@ LOGICA_CENTI:
     SUBWF   NUM_UNI, W
     BTFSS   STATUS, Z
     GOTO    CHK_LIMITE
-
     CLRF    NUM_UNI
     INCF    NUM_DEC, F
     MOVLW   d'10'
     SUBWF   NUM_DEC, W
     BTFSS   STATUS, Z
     GOTO    CHK_LIMITE
-
     CLRF    NUM_DEC
 
 CHK_LIMITE:
@@ -665,16 +618,11 @@ CHK_LIMITE:
     BTFSS   STATUS, Z
     GOTO    ACT_DISPLAYS
 
-    ; Tiempo agotado → "28", congelar, enviar desaprobado
-    MOVLW   d'2'
-    MOVWF   NUM_DEC
-    MOVLW   d'8'
-    MOVWF   NUM_UNI
+    ; Tiempo agotado: congelar y enviar desaprobado
     CLRF    JUGANDO
     BSF     TERMINADO, 0
     BANKSEL PORTB
     BSF     PORTB, 1
-    ; Enviar mensaje AHORA, mientras GIE=0 (imposible rebote)
     CALL    TX_EXCEDIDO_POR_RANGO
 
 ACT_DISPLAYS:
@@ -685,6 +633,8 @@ CLEAR_T0IF:
     BCF     INTCON, T0IF
 
 FIN_ISR:
+    MOVF    PCLATH_TEMP, W  ; restaurar PCLATH
+    MOVWF   PCLATH
     SWAPF   STATUS_TEMP, W
     MOVWF   STATUS
     SWAPF   W_TEMP, F
@@ -692,23 +642,11 @@ FIN_ISR:
     RETFIE
 
 ; ============================================================
-;  TABLAS DE CADENAS
-;
-;  Cada tabla con ADDWF PCL debe estar íntegra dentro de una
-;  misma página de 256 palabras. Se usa ORG en múltiplos de
-;  0x40 (64 palabras) ya que los mensajes cortos caben en ≤40.
-;
-;  ORG   Tabla                  Tamaño
-;  0x200 STR_JOVEN_NORMAL       ≈28 palabras
-;  0x240 STR_JOVEN_EXCEDIDO     ≈30 palabras
-;  0x280 STR_ADULTO_NORMAL      ≈32 palabras
-;  0x2C0 STR_ADULTO_EXCEDIDO    ≈35 palabras
-;  0x300 STR_ACV_NORMAL         ≈32 palabras
-;  0x340 STR_ACV_EXCEDIDO       ≈35 palabras
+;  TABLAS DE CADENAS (ORG alineados a 64 palabras)
 ; ============================================================
 
     ORG     0x200
-STR_JOVEN_NORMAL:           ; "Joven | Prueba aprobada\r\n"
+STR_JOVEN_NORMAL:
     ANDLW   0x1F
     ADDWF   PCL, F
     RETLW   'J'
@@ -739,7 +677,7 @@ STR_JOVEN_NORMAL:           ; "Joven | Prueba aprobada\r\n"
     RETLW   0x00
 
     ORG     0x240
-STR_JOVEN_EXCEDIDO:         ; "Joven | Prueba desaprobada\r\n"
+STR_JOVEN_EXCEDIDO:
     ANDLW   0x1F
     ADDWF   PCL, F
     RETLW   'J'
@@ -773,7 +711,7 @@ STR_JOVEN_EXCEDIDO:         ; "Joven | Prueba desaprobada\r\n"
     RETLW   0x00
 
     ORG     0x280
-STR_ADULTO_NORMAL:          ; "Adulto mayor | Prueba aprobada\r\n"
+STR_ADULTO_NORMAL:
     ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'A'
@@ -811,7 +749,7 @@ STR_ADULTO_NORMAL:          ; "Adulto mayor | Prueba aprobada\r\n"
     RETLW   0x00
 
     ORG     0x2C0
-STR_ADULTO_EXCEDIDO:        ; "Adulto mayor | Prueba desaprobada\r\n"
+STR_ADULTO_EXCEDIDO:
     ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'A'
@@ -852,7 +790,7 @@ STR_ADULTO_EXCEDIDO:        ; "Adulto mayor | Prueba desaprobada\r\n"
     RETLW   0x00
 
     ORG     0x300
-STR_ACV_NORMAL:             ; "Paciente ACV | Prueba aprobada\r\n"
+STR_ACV_NORMAL:
     ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'P'
@@ -890,7 +828,7 @@ STR_ACV_NORMAL:             ; "Paciente ACV | Prueba aprobada\r\n"
     RETLW   0x00
 
     ORG     0x340
-STR_ACV_EXCEDIDO:           ; "Paciente ACV | Prueba desaprobada\r\n"
+STR_ACV_EXCEDIDO:
     ANDLW   0x3F
     ADDWF   PCL, F
     RETLW   'P'
