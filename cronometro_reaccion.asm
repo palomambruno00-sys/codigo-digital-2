@@ -195,23 +195,23 @@ INICIO:
     MOVLW   0x0A
     CALL    TX_BYTE
 
-    ; Habilitar interrupciones: T0IE + INTE + GIE
+    ; Habilitar interrupciones: T0IE + GIE (INTE deshabilitado, botón por polling)
     BANKSEL INTCON
-    MOVLW   b'10110000'
+    MOVLW   b'10100000'
     MOVWF   INTCON
 
 ; ============================================================
 ;  LOOP PRINCIPAL
-;  Solo lee ADC, enciende LED y espera. Todo lo demás en ISR.
+;  Lee ADC, enciende LED, y hace polling del botón RB0.
 ; ============================================================
 LOOP:
     CALL    LEER_ADC            ; W = rango (1/2/3), enciende LED
 
     BTFSC   TERMINADO, 0
-    GOTO    LOOP                ; congelado → esperar RB0
+    GOTO    POLL_RESET          ; congelado → esperar RB0 para resetear
 
     BTFSC   JUGANDO, 0
-    GOTO    LOOP                ; jugando → ISR maneja todo
+    GOTO    POLL_CONGELAR       ; jugando → detectar presión para congelar
 
     ; -------------------------------------------------------
     ; ESPERANDO: detectar cambio de rango
@@ -225,6 +225,43 @@ RANGO_CAMBIO:
     CALL    LEER_ADC
     MOVWF   RANGO_PREV
     CLRF    ESTABLE_COUNT
+    GOTO    LOOP
+
+; -------------------------------------------------------
+; POLL_RESET: TERMINADO=1 → esperar presión de RB0 para resetear
+; -------------------------------------------------------
+POLL_RESET:
+    BANKSEL PORTB
+    BTFSC   PORTB, 0            ; RB0=0 significa presionado (pull-up activo)
+    GOTO    LOOP                ; no presionado → seguir esperando
+WAIT_REL_RST:
+    BANKSEL PORTB
+    BTFSS   PORTB, 0            ; esperar a que suelte (evita rebote)
+    GOTO    WAIT_REL_RST
+    CALL    RESET_TOTAL
+    GOTO    LOOP
+
+; -------------------------------------------------------
+; POLL_CONGELAR: JUGANDO=1 → detectar presión para congelar
+; -------------------------------------------------------
+POLL_CONGELAR:
+    BANKSEL PORTB
+    BTFSC   PORTB, 0            ; RB0=0 significa presionado
+    GOTO    LOOP                ; no presionado → seguir
+    ; Congelar cronómetro – deshabilitar GIE durante TX
+    BANKSEL INTCON
+    BCF     INTCON, GIE
+    CLRF    JUGANDO
+    BSF     TERMINADO, 0
+    BANKSEL PORTB
+    BSF     PORTB, 1            ; RB1 fijo encendido
+    CALL    TX_NORMAL_POR_RANGO
+WAIT_REL_JUG:
+    BANKSEL PORTB
+    BTFSS   PORTB, 0            ; esperar a que suelte
+    GOTO    WAIT_REL_JUG
+    BANKSEL INTCON
+    BSF     INTCON, GIE
     GOTO    LOOP
 
 ; ============================================================
@@ -494,42 +531,9 @@ ISR:
     MOVWF   STATUS_TEMP
 
     ; -------------------------------------------------------
-    ; 1. INTERRUPCIÓN EXTERNA RB0
+    ; INTERRUPCIÓN TIMER0 (~5ms)
     ; -------------------------------------------------------
     BANKSEL INTCON
-    BTFSS   INTCON, INTF
-    GOTO    CHECK_TMR0
-
-    BTFSC   TERMINADO, 0
-    GOTO    HACER_RESET
-
-    BTFSC   JUGANDO, 0
-    GOTO    CONGELAR_TIEMPO
-
-    GOTO    CLEAR_INTF
-
-HACER_RESET:
-    CALL    RESET_TOTAL
-    GOTO    CLEAR_INTF
-
-CONGELAR_TIEMPO:
-    ; Detener cronómetro y congelar display
-    CLRF    JUGANDO
-    BSF     TERMINADO, 0
-    BANKSEL PORTB
-    BSF     PORTB, 1            ; RB1 fijo encendido
-    ; Enviar mensaje AHORA, mientras GIE=0 (imposible rebote)
-    CALL    TX_NORMAL_POR_RANGO
-
-CLEAR_INTF:
-    BANKSEL INTCON
-    BCF     INTCON, INTF
-    GOTO    FIN_ISR
-
-    ; -------------------------------------------------------
-    ; 2. INTERRUPCIÓN TIMER0 (~5ms)
-    ; -------------------------------------------------------
-CHECK_TMR0:
     BTFSS   INTCON, T0IF
     GOTO    FIN_ISR
 
