@@ -142,16 +142,24 @@ INICIO:
     ; USART: 9600 baud, 8E1 (paridad par por software, 9 bits)
     ; Fosc=4MHz, BRGH=1 → SPBRG=(4000000/16/9600)-1=25
     ; TX9=1 habilita el 9° bit (TX9D) usado como bit de paridad
+    ;
+    ; ORDEN OBLIGATORIO (datasheet PIC16F887):
+    ;   1) SPBRG  2) RCSTA(SPEN=1)  3) TXSTA(TXEN=1,TX9=1)
+    ; Activar TXEN antes de SPEN impide que el módulo arranque.
+    ;
+    ; TERMINAL: configurar a  9600 – 8 – E (par) – 1
+    ;           RC6 (TX del PIC) → RXD del CP2102
+    ;           RC7 (RX del PIC) → TXD del CP2102
     ; -------------------------------------------------------
     BANKSEL SPBRG
     MOVLW   d'25'
     MOVWF   SPBRG
-    BANKSEL TXSTA
-    MOVLW   b'01100100'     ; TX9=1, TXEN=1, BRGH=1, async
-    MOVWF   TXSTA
-    BANKSEL RCSTA
-    MOVLW   b'10000000'     ; SPEN=1
+    BANKSEL RCSTA               ; paso 2: habilitar serial port
+    MOVLW   b'10000000'         ; SPEN=1
     MOVWF   RCSTA
+    BANKSEL TXSTA               ; paso 3: habilitar TX + paridad
+    MOVLW   b'01100100'         ; TX9=1, TXEN=1, BRGH=1, async
+    MOVWF   TXSTA
 
     ; Inicializar variables
     CLRF    NUM_DEC
@@ -165,8 +173,31 @@ INICIO:
     CLRF    LIMITE
     CLRF    RANGO_PREV
     CLRF    ESTABLE_COUNT
+    CLRF    TX_IDX
+    CLRF    TX_DATA
+    CLRF    PAR_TMP
 
     CALL    CONV_DISPLAYS
+
+    ; -------------------------------------------------------
+    ; Mensaje de arranque – confirma que la UART funciona
+    ; Si ves "LISTO" en el terminal, la UART está OK.
+    ; Si no ves nada, revisar: cableado RC6→RXD, baud 9600 8E1
+    ; -------------------------------------------------------
+    MOVLW   'L'
+    CALL    TX_BYTE
+    MOVLW   'I'
+    CALL    TX_BYTE
+    MOVLW   'S'
+    CALL    TX_BYTE
+    MOVLW   'T'
+    CALL    TX_BYTE
+    MOVLW   'O'
+    CALL    TX_BYTE
+    MOVLW   0x0D
+    CALL    TX_BYTE
+    MOVLW   0x0A
+    CALL    TX_BYTE
 
     ; Habilitar interrupciones: T0IE + INTE + GIE
     BANKSEL INTCON
