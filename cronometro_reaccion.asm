@@ -1,6 +1,6 @@
 ; ============================================================
 ; Cronómetro de Reacción - PIC16F887 - 4MHz interno
-; Con transmisión serie asíncrona (UART 9600,8,N,1)
+; Con transmisión serie asíncrona (UART 9600,8,E,1 – paridad par)
 ;
 ; Rangos del potenciómetro y categoría del paciente:
 ;   Rango 1 – Rojo    (ADC 0-85)    – Persona joven        – límite 500ms
@@ -54,6 +54,7 @@
         ; --- UART ---
         TX_IDX          ; índice para recorrer la cadena
         TX_DATA         ; byte temporal de transmisión
+        PAR_TMP         ; acumulador de bits para cálculo de paridad
     ENDC
 
 ; ============================================================
@@ -138,14 +139,15 @@ INICIO:
     MOVWF   TMR0
 
     ; -------------------------------------------------------
-    ; USART: 9600 baud, 8N1
+    ; USART: 9600 baud, 8E1 (paridad par por software, 9 bits)
     ; Fosc=4MHz, BRGH=1 → SPBRG=(4000000/16/9600)-1=25
+    ; TX9=1 habilita el 9° bit (TX9D) usado como bit de paridad
     ; -------------------------------------------------------
     BANKSEL SPBRG
     MOVLW   d'25'
     MOVWF   SPBRG
     BANKSEL TXSTA
-    MOVLW   b'00100100'     ; TXEN=1, BRGH=1, async, 8 bits
+    MOVLW   b'01100100'     ; TX9=1, TXEN=1, BRGH=1, async
     MOVWF   TXSTA
     BANKSEL RCSTA
     MOVLW   b'10000000'     ; SPEN=1
@@ -318,14 +320,48 @@ ARRANCAR_PRUEBA:
     RETURN
 
 ; ============================================================
-;  TX_BYTE  –  Envía el byte en W por UART
-;  Precondición: GIE puede estar en cualquier estado.
-;  TXSTA (banco 1) y TXREG (banco 0) son accedidos con BANKSEL.
+;  TX_BYTE  –  Envía el byte en W con paridad par (9 bits)
+;
+;  Paridad par: el bit TX9D se elige de forma que el total de
+;  1s en los 9 bits transmitidos sea siempre par.
+;  El PIC16F887 no tiene hardware de paridad; se calcula
+;  contando los bits en 1 del byte y cargando TX9D según sea
+;  necesario para que la cuenta total resulte par.
+;
+;  Cálculo: si la cantidad de 1s en el byte es par → TX9D=0
+;           si la cantidad de 1s es impar             → TX9D=1
+;  Eso se determina con el bit 0 del conteo (LSB).
 ; ============================================================
 TX_BYTE:
     MOVWF   TX_DATA
-TX_BYTE_WAIT:
+
+    ; --- Contar bits en 1 del byte (resultado en PAR_TMP) ---
+    CLRF    PAR_TMP
+    BTFSC   TX_DATA, 0
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 1
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 2
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 3
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 4
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 5
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 6
+    INCF    PAR_TMP, F
+    BTFSC   TX_DATA, 7
+    INCF    PAR_TMP, F
+
+    ; --- Cargar TX9D: 0 si conteo par, 1 si conteo impar ---
     BANKSEL TXSTA
+    BCF     TXSTA, TX9D         ; asumir paridad = 0 (conteo par)
+    BTFSC   PAR_TMP, 0          ; ¿LSB del conteo = 1? (conteo impar)
+    BSF     TXSTA, TX9D         ;   sí → parity bit = 1 para compensar
+
+    ; --- Esperar shift register vacío y enviar ---
+TX_BYTE_WAIT:
     BTFSS   TXSTA, TRMT         ; 1 = shift register vacío → listo
     GOTO    TX_BYTE_WAIT
     BANKSEL TXREG
