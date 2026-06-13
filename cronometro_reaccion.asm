@@ -305,6 +305,7 @@ CL_AMARILLO:
 ;  CONV_DISPLAYS
 ; ============================================================
 CONV_DISPLAYS:
+    CLRF    PCLATH              ; TABLA está en página 0 (0x000-0x0FF)
     MOVF    NUM_DEC, W
     CALL    TABLA
     MOVWF   DISP_DEC
@@ -415,6 +416,8 @@ TER_R3:
 ; ============================================================
 TX_JOVEN_NORMAL:
     CLRF    TX_IDX
+    MOVLW   0x02                ; STR_JOVEN_NORMAL está en 0x200 → PCLATH=2
+    MOVWF   PCLATH
 TXJ_NRM_LP:
     MOVF    TX_IDX, W
     CALL    STR_JOVEN_NORMAL
@@ -427,6 +430,8 @@ TXJ_NRM_LP:
 
 TX_JOVEN_EXCEDIDO:
     CLRF    TX_IDX
+    MOVLW   0x02                ; STR_JOVEN_EXCEDIDO está en 0x240 → PCLATH=2
+    MOVWF   PCLATH
 TXJ_EXC_LP:
     MOVF    TX_IDX, W
     CALL    STR_JOVEN_EXCEDIDO
@@ -439,6 +444,8 @@ TXJ_EXC_LP:
 
 TX_ADULTO_NORMAL:
     CLRF    TX_IDX
+    MOVLW   0x02                ; STR_ADULTO_NORMAL está en 0x280 → PCLATH=2
+    MOVWF   PCLATH
 TXA_NRM_LP:
     MOVF    TX_IDX, W
     CALL    STR_ADULTO_NORMAL
@@ -451,6 +458,8 @@ TXA_NRM_LP:
 
 TX_ADULTO_EXCEDIDO:
     CLRF    TX_IDX
+    MOVLW   0x02                ; STR_ADULTO_EXCEDIDO está en 0x2C0 → PCLATH=2
+    MOVWF   PCLATH
 TXA_EXC_LP:
     MOVF    TX_IDX, W
     CALL    STR_ADULTO_EXCEDIDO
@@ -463,6 +472,8 @@ TXA_EXC_LP:
 
 TX_ACV_NORMAL:
     CLRF    TX_IDX
+    MOVLW   0x03                ; STR_ACV_NORMAL está en 0x300 → PCLATH=3
+    MOVWF   PCLATH
 TXACV_NRM_LP:
     MOVF    TX_IDX, W
     CALL    STR_ACV_NORMAL
@@ -475,6 +486,8 @@ TXACV_NRM_LP:
 
 TX_ACV_EXCEDIDO:
     CLRF    TX_IDX
+    MOVLW   0x03                ; STR_ACV_EXCEDIDO está en 0x340 → PCLATH=3
+    MOVWF   PCLATH
 TXACV_EXC_LP:
     MOVF    TX_IDX, W
     CALL    STR_ACV_EXCEDIDO
