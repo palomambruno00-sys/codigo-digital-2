@@ -8,12 +8,12 @@
 ;   Rango 3 – Amarillo(ADC 171-255) – Paciente post-ACV    – límite 1500ms
 ;
 ; Mensajes UART al finalizar la prueba (6 combinaciones):
-;   ENVIAR_MSG=1  Rango 1 normal   → "Cat: Joven      | Resultado: Rango psicomotriz normal\r\n"
-;   ENVIAR_MSG=2  Rango 1 excedido → "Cat: Joven      | Resultado: Rango psicomotriz excedido de tiempo\r\n"
-;   ENVIAR_MSG=3  Rango 2 normal   → "Cat: Adulto mayor | Resultado: Rango psicomotriz normal\r\n"
-;   ENVIAR_MSG=4  Rango 2 excedido → "Cat: Adulto mayor | Resultado: Rango psicomotriz excedido de tiempo\r\n"
-;   ENVIAR_MSG=5  Rango 3 normal   → "Cat: Paciente ACV | Resultado: Rango psicomotriz normal\r\n"
-;   ENVIAR_MSG=6  Rango 3 excedido → "Cat: Paciente ACV | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+;   ENVIAR_MSG=1  Rango 1 aprobado    → "Joven | Prueba aprobada\r\n"
+;   ENVIAR_MSG=2  Rango 1 desaprobado → "Joven | Prueba desaprobada\r\n"
+;   ENVIAR_MSG=3  Rango 2 aprobado    → "Adulto mayor | Prueba aprobada\r\n"
+;   ENVIAR_MSG=4  Rango 2 desaprobado → "Adulto mayor | Prueba desaprobada\r\n"
+;   ENVIAR_MSG=5  Rango 3 aprobado    → "Paciente ACV | Prueba aprobada\r\n"
+;   ENVIAR_MSG=6  Rango 3 desaprobado → "Paciente ACV | Prueba desaprobada\r\n"
 ; ============================================================
     LIST    P=16F887
     INCLUDE <P16F887.INC>
@@ -732,18 +732,13 @@ FIN_ISR:
 ; ============================================================
 
 ; ------------------------------------------------------------
-;  Rango 1 – Joven – Normal
-;  "Cat: Joven | Resultado: Rango psicomotriz normal\r\n"
+;  Rango 1 – Joven – Aprobado
+;  "Joven | Prueba aprobada\r\n"
 ; ------------------------------------------------------------
     ORG     0x200
 STR_JOVEN_NORMAL:
-    ANDLW   0x7F
+    ANDLW   0x1F
     ADDWF   PCL, F
-    RETLW   'C'
-    RETLW   'a'
-    RETLW   't'
-    RETLW   ':'
-    RETLW   ' '
     RETLW   'J'
     RETLW   'o'
     RETLW   'v'
@@ -752,276 +747,158 @@ STR_JOVEN_NORMAL:
     RETLW   ' '
     RETLW   '|'
     RETLW   ' '
-    RETLW   'R'
-    RETLW   'e'
-    RETLW   's'
+    RETLW   'P'
+    RETLW   'r'
     RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
+    RETLW   'e'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   ' '
+    RETLW   'a'
+    RETLW   'p'
+    RETLW   'r'
+    RETLW   'o'
+    RETLW   'b'
     RETLW   'a'
     RETLW   'd'
-    RETLW   'o'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'R'
     RETLW   'a'
-    RETLW   'n'
-    RETLW   'g'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'p'
-    RETLW   's'
-    RETLW   'i'
-    RETLW   'c'
-    RETLW   'o'
-    RETLW   'm'
-    RETLW   'o'
-    RETLW   't'
-    RETLW   'r'
-    RETLW   'i'
-    RETLW   'z'
-    RETLW   ' '
-    RETLW   'n'
-    RETLW   'o'
-    RETLW   'r'
-    RETLW   'm'
-    RETLW   'a'
-    RETLW   'l'
     RETLW   0x0D
     RETLW   0x0A
     RETLW   0x00
 
 ; ------------------------------------------------------------
-;  Rango 1 – Joven – Excedido
-;  "Cat: Joven | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+;  Rango 1 – Joven – Desaprobado
+;  "Joven | Prueba desaprobada\r\n"
+; ------------------------------------------------------------
+    ORG     0x240
+STR_JOVEN_EXCEDIDO:
+    ANDLW   0x1F
+    ADDWF   PCL, F
+    RETLW   'J'
+    RETLW   'o'
+    RETLW   'v'
+    RETLW   'e'
+    RETLW   'n'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'P'
+    RETLW   'r'
+    RETLW   'u'
+    RETLW   'e'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   ' '
+    RETLW   'd'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'a'
+    RETLW   'p'
+    RETLW   'r'
+    RETLW   'o'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'a'
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
+
+; ------------------------------------------------------------
+;  Rango 2 – Adulto mayor – Aprobado
+;  "Adulto mayor | Prueba aprobada\r\n"
 ; ------------------------------------------------------------
     ORG     0x280
-STR_JOVEN_EXCEDIDO:
-    ANDLW   0x7F
+STR_ADULTO_NORMAL:
+    ANDLW   0x1F
     ADDWF   PCL, F
-    RETLW   'C'
-    RETLW   'a'
-    RETLW   't'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'J'
-    RETLW   'o'
-    RETLW   'v'
-    RETLW   'e'
-    RETLW   'n'
-    RETLW   ' '
-    RETLW   '|'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'e'
-    RETLW   's'
+    RETLW   'A'
+    RETLW   'd'
     RETLW   'u'
     RETLW   'l'
     RETLW   't'
-    RETLW   'a'
-    RETLW   'd'
-    RETLW   'o'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'a'
-    RETLW   'n'
-    RETLW   'g'
     RETLW   'o'
     RETLW   ' '
-    RETLW   'p'
-    RETLW   's'
-    RETLW   'i'
-    RETLW   'c'
-    RETLW   'o'
     RETLW   'm'
+    RETLW   'a'
+    RETLW   'y'
     RETLW   'o'
-    RETLW   't'
     RETLW   'r'
-    RETLW   'i'
-    RETLW   'z'
     RETLW   ' '
-    RETLW   'e'
-    RETLW   'x'
-    RETLW   'c'
-    RETLW   'e'
-    RETLW   'd'
-    RETLW   'i'
-    RETLW   'd'
-    RETLW   'o'
+    RETLW   '|'
     RETLW   ' '
-    RETLW   'd'
+    RETLW   'P'
+    RETLW   'r'
+    RETLW   'u'
     RETLW   'e'
+    RETLW   'b'
+    RETLW   'a'
     RETLW   ' '
-    RETLW   't'
-    RETLW   'i'
-    RETLW   'e'
-    RETLW   'm'
+    RETLW   'a'
     RETLW   'p'
+    RETLW   'r'
     RETLW   'o'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'a'
     RETLW   0x0D
     RETLW   0x0A
     RETLW   0x00
 
 ; ------------------------------------------------------------
-;  Rango 2 – Adulto mayor – Normal
-;  "Cat: Adulto mayor | Resultado: Rango psicomotriz normal\r\n"
+;  Rango 2 – Adulto mayor – Desaprobado
+;  "Adulto mayor | Prueba desaprobada\r\n"
+; ------------------------------------------------------------
+    ORG     0x2C0
+STR_ADULTO_EXCEDIDO:
+    ANDLW   0x3F
+    ADDWF   PCL, F
+    RETLW   'A'
+    RETLW   'd'
+    RETLW   'u'
+    RETLW   'l'
+    RETLW   't'
+    RETLW   'o'
+    RETLW   ' '
+    RETLW   'm'
+    RETLW   'a'
+    RETLW   'y'
+    RETLW   'o'
+    RETLW   'r'
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
+    RETLW   'P'
+    RETLW   'r'
+    RETLW   'u'
+    RETLW   'e'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   ' '
+    RETLW   'd'
+    RETLW   'e'
+    RETLW   's'
+    RETLW   'a'
+    RETLW   'p'
+    RETLW   'r'
+    RETLW   'o'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'a'
+    RETLW   0x0D
+    RETLW   0x0A
+    RETLW   0x00
+
+; ------------------------------------------------------------
+;  Rango 3 – Paciente ACV – Aprobado
+;  "Paciente ACV | Prueba aprobada\r\n"
 ; ------------------------------------------------------------
     ORG     0x300
-STR_ADULTO_NORMAL:
-    ANDLW   0x7F
-    ADDWF   PCL, F
-    RETLW   'C'
-    RETLW   'a'
-    RETLW   't'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'A'
-    RETLW   'd'
-    RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'm'
-    RETLW   'a'
-    RETLW   'y'
-    RETLW   'o'
-    RETLW   'r'
-    RETLW   ' '
-    RETLW   '|'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'e'
-    RETLW   's'
-    RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
-    RETLW   'a'
-    RETLW   'd'
-    RETLW   'o'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'a'
-    RETLW   'n'
-    RETLW   'g'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'p'
-    RETLW   's'
-    RETLW   'i'
-    RETLW   'c'
-    RETLW   'o'
-    RETLW   'm'
-    RETLW   'o'
-    RETLW   't'
-    RETLW   'r'
-    RETLW   'i'
-    RETLW   'z'
-    RETLW   ' '
-    RETLW   'n'
-    RETLW   'o'
-    RETLW   'r'
-    RETLW   'm'
-    RETLW   'a'
-    RETLW   'l'
-    RETLW   0x0D
-    RETLW   0x0A
-    RETLW   0x00
-
-; ------------------------------------------------------------
-;  Rango 2 – Adulto mayor – Excedido
-;  "Cat: Adulto mayor | Resultado: Rango psicomotriz excedido de tiempo\r\n"
-; ------------------------------------------------------------
-    ORG     0x380
-STR_ADULTO_EXCEDIDO:
-    ANDLW   0x7F
-    ADDWF   PCL, F
-    RETLW   'C'
-    RETLW   'a'
-    RETLW   't'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'A'
-    RETLW   'd'
-    RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'm'
-    RETLW   'a'
-    RETLW   'y'
-    RETLW   'o'
-    RETLW   'r'
-    RETLW   ' '
-    RETLW   '|'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'e'
-    RETLW   's'
-    RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
-    RETLW   'a'
-    RETLW   'd'
-    RETLW   'o'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'a'
-    RETLW   'n'
-    RETLW   'g'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'p'
-    RETLW   's'
-    RETLW   'i'
-    RETLW   'c'
-    RETLW   'o'
-    RETLW   'm'
-    RETLW   'o'
-    RETLW   't'
-    RETLW   'r'
-    RETLW   'i'
-    RETLW   'z'
-    RETLW   ' '
-    RETLW   'e'
-    RETLW   'x'
-    RETLW   'c'
-    RETLW   'e'
-    RETLW   'd'
-    RETLW   'i'
-    RETLW   'd'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'd'
-    RETLW   'e'
-    RETLW   ' '
-    RETLW   't'
-    RETLW   'i'
-    RETLW   'e'
-    RETLW   'm'
-    RETLW   'p'
-    RETLW   'o'
-    RETLW   0x0D
-    RETLW   0x0A
-    RETLW   0x00
-
-; ------------------------------------------------------------
-;  Rango 3 – Paciente ACV – Normal
-;  "Cat: Paciente ACV | Resultado: Rango psicomotriz normal\r\n"
-; ------------------------------------------------------------
-    ORG     0x400
 STR_ACV_NORMAL:
-    ANDLW   0x7F
+    ANDLW   0x1F
     ADDWF   PCL, F
-    RETLW   'C'
-    RETLW   'a'
-    RETLW   't'
-    RETLW   ':'
-    RETLW   ' '
     RETLW   'P'
     RETLW   'a'
     RETLW   'c'
@@ -1037,58 +914,33 @@ STR_ACV_NORMAL:
     RETLW   ' '
     RETLW   '|'
     RETLW   ' '
-    RETLW   'R'
-    RETLW   'e'
-    RETLW   's'
+    RETLW   'P'
+    RETLW   'r'
     RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
+    RETLW   'e'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   ' '
+    RETLW   'a'
+    RETLW   'p'
+    RETLW   'r'
+    RETLW   'o'
+    RETLW   'b'
     RETLW   'a'
     RETLW   'd'
-    RETLW   'o'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'R'
     RETLW   'a'
-    RETLW   'n'
-    RETLW   'g'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'p'
-    RETLW   's'
-    RETLW   'i'
-    RETLW   'c'
-    RETLW   'o'
-    RETLW   'm'
-    RETLW   'o'
-    RETLW   't'
-    RETLW   'r'
-    RETLW   'i'
-    RETLW   'z'
-    RETLW   ' '
-    RETLW   'n'
-    RETLW   'o'
-    RETLW   'r'
-    RETLW   'm'
-    RETLW   'a'
-    RETLW   'l'
     RETLW   0x0D
     RETLW   0x0A
     RETLW   0x00
 
 ; ------------------------------------------------------------
-;  Rango 3 – Paciente ACV – Excedido
-;  "Cat: Paciente ACV | Resultado: Rango psicomotriz excedido de tiempo\r\n"
+;  Rango 3 – Paciente ACV – Desaprobado
+;  "Paciente ACV | Prueba desaprobada\r\n"
 ; ------------------------------------------------------------
-    ORG     0x480
+    ORG     0x340
 STR_ACV_EXCEDIDO:
-    ANDLW   0x7F
+    ANDLW   0x3F
     ADDWF   PCL, F
-    RETLW   'C'
-    RETLW   'a'
-    RETLW   't'
-    RETLW   ':'
-    RETLW   ' '
     RETLW   'P'
     RETLW   'a'
     RETLW   'c'
@@ -1104,53 +956,24 @@ STR_ACV_EXCEDIDO:
     RETLW   ' '
     RETLW   '|'
     RETLW   ' '
-    RETLW   'R'
-    RETLW   'e'
-    RETLW   's'
-    RETLW   'u'
-    RETLW   'l'
-    RETLW   't'
-    RETLW   'a'
-    RETLW   'd'
-    RETLW   'o'
-    RETLW   ':'
-    RETLW   ' '
-    RETLW   'R'
-    RETLW   'a'
-    RETLW   'n'
-    RETLW   'g'
-    RETLW   'o'
-    RETLW   ' '
-    RETLW   'p'
-    RETLW   's'
-    RETLW   'i'
-    RETLW   'c'
-    RETLW   'o'
-    RETLW   'm'
-    RETLW   'o'
-    RETLW   't'
+    RETLW   'P'
     RETLW   'r'
-    RETLW   'i'
-    RETLW   'z'
-    RETLW   ' '
+    RETLW   'u'
     RETLW   'e'
-    RETLW   'x'
-    RETLW   'c'
-    RETLW   'e'
-    RETLW   'd'
-    RETLW   'i'
-    RETLW   'd'
-    RETLW   'o'
+    RETLW   'b'
+    RETLW   'a'
     RETLW   ' '
     RETLW   'd'
     RETLW   'e'
-    RETLW   ' '
-    RETLW   't'
-    RETLW   'i'
-    RETLW   'e'
-    RETLW   'm'
+    RETLW   's'
+    RETLW   'a'
     RETLW   'p'
+    RETLW   'r'
     RETLW   'o'
+    RETLW   'b'
+    RETLW   'a'
+    RETLW   'd'
+    RETLW   'a'
     RETLW   0x0D
     RETLW   0x0A
     RETLW   0x00
