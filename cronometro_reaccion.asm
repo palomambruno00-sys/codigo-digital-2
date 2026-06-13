@@ -319,6 +319,23 @@ ARRANCAR_PRUEBA:
     RETURN
 
 ; ============================================================
+;  TX_DIGITOS_CRLF  – envía NUM_DEC y NUM_UNI como ASCII + \r\n
+; ============================================================
+TX_DIGITOS_CRLF:
+    CLRF    PCLATH
+    MOVF    NUM_DEC, W
+    ADDLW   '0'
+    CALL    TX_BYTE
+    MOVF    NUM_UNI, W
+    ADDLW   '0'
+    CALL    TX_BYTE
+    MOVLW   0x0D
+    CALL    TX_BYTE
+    MOVLW   0x0A
+    CALL    TX_BYTE
+    RETURN
+
+; ============================================================
 ;  TX_BYTE  (banco 0 al entrar y al salir)
 ; ============================================================
 TX_BYTE:
@@ -341,6 +358,7 @@ TX_NORMAL_POR_RANGO:
     BTFSS   STATUS, Z
     GOTO    TNR_R2
     CALL    TX_JOVEN_NORMAL
+    CALL    TX_DIGITOS_CRLF
     RETURN
 TNR_R2:
     MOVF    RANGO_PREV, W
@@ -348,9 +366,11 @@ TNR_R2:
     BTFSS   STATUS, Z
     GOTO    TNR_R3
     CALL    TX_ADULTO_NORMAL
+    CALL    TX_DIGITOS_CRLF
     RETURN
 TNR_R3:
     CALL    TX_ACV_NORMAL
+    CALL    TX_DIGITOS_CRLF
     RETURN
 
 TX_EXCEDIDO_POR_RANGO:
@@ -359,6 +379,7 @@ TX_EXCEDIDO_POR_RANGO:
     BTFSS   STATUS, Z
     GOTO    TER_R2
     CALL    TX_JOVEN_EXCEDIDO
+    CALL    TX_DIGITOS_CRLF
     RETURN
 TER_R2:
     MOVF    RANGO_PREV, W
@@ -366,9 +387,11 @@ TER_R2:
     BTFSS   STATUS, Z
     GOTO    TER_R3
     CALL    TX_ADULTO_EXCEDIDO
+    CALL    TX_DIGITOS_CRLF
     RETURN
 TER_R3:
     CALL    TX_ACV_EXCEDIDO
+    CALL    TX_DIGITOS_CRLF
     RETURN
 
 ; ============================================================
@@ -675,8 +698,9 @@ STR_JOVEN_NORMAL:
     RETLW   'a'
     RETLW   'd'
     RETLW   'a'
-    RETLW   0x0D
-    RETLW   0x0A
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
     RETLW   0x00
 
     ORG     0x240
@@ -709,8 +733,9 @@ STR_JOVEN_EXCEDIDO:
     RETLW   'a'
     RETLW   'd'
     RETLW   'a'
-    RETLW   0x0D
-    RETLW   0x0A
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
     RETLW   0x00
 
     ORG     0x280
@@ -747,8 +772,9 @@ STR_ADULTO_NORMAL:
     RETLW   'a'
     RETLW   'd'
     RETLW   'a'
-    RETLW   0x0D
-    RETLW   0x0A
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
     RETLW   0x00
 
     ORG     0x2C0
@@ -788,8 +814,9 @@ STR_ADULTO_EXCEDIDO:
     RETLW   'a'
     RETLW   'd'
     RETLW   'a'
-    RETLW   0x0D
-    RETLW   0x0A
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
     RETLW   0x00
 
     ORG     0x300
@@ -826,8 +853,9 @@ STR_ACV_NORMAL:
     RETLW   'a'
     RETLW   'd'
     RETLW   'a'
-    RETLW   0x0D
-    RETLW   0x0A
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
     RETLW   0x00
 
     ORG     0x340
@@ -867,8 +895,9 @@ STR_ACV_EXCEDIDO:
     RETLW   'a'
     RETLW   'd'
     RETLW   'a'
-    RETLW   0x0D
-    RETLW   0x0A
+    RETLW   ' '
+    RETLW   '|'
+    RETLW   ' '
     RETLW   0x00
 
     END
