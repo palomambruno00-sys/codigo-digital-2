@@ -1,0 +1,1752 @@
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  1
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+                      00001 ; ============================================================
+                      00002 ; Cronómetro de Reacción - PIC16F887 - 4MHz interno
+                      00003 ; UART 9600,8N1
+                      00004 ;
+                      00005 ; Rangos:
+                      00006 ;   Rango 1 – Rojo    (ADC 0-85)    – Joven        – 500ms
+                      00007 ;   Rango 2 – Verde   (ADC 86-170)  – Adulto mayor – 1000ms
+                      00008 ;   Rango 3 – Amarillo(ADC 171-255) – Paciente ACV – 1500ms
+                      00009 ;
+                      00010 ; Flujo:
+                      00011 ;   1) Ajustar potenciómetro → LED indica categoría
+                      00012 ;   2) Mantener rango 1 segundo → cronómetro arranca solo
+                      00013 ;   3) Presionar RB0 durante prueba → display congela + UART mensaje
+                      00014 ;   4) Presionar RB0 congelado → reset
+                      00015 ; ============================================================
+Warning[215]: Processor superseded by command line.
+                      00016     LIST    P=16F887
+                      00017     INCLUDE <P16F887.INC>
+Warning[231]: Found lower case match for include filename.
+                      00001         LIST
+                      00002 
+                      00003 ;==========================================================================
+                      00004 ; Build date : Aug 07 2014
+                      00005 ;  MPASM PIC16F887 processor include
+                      00006 ; 
+                      00007 ;  (c) Copyright 1999-2014 Microchip Technology, All rights reserved
+                      00008 ;==========================================================================
+                      00009 
+                      00810         LIST
+                      00018 
+2007   2FD4           00019     __CONFIG _CONFIG1, _INTRC_OSC_NOCLKOUT & _WDT_OFF & _PWRTE_OFF & _MCLRE_OFF & _LVP_OFF
+                      00020 
+                      00021 ; ============================================================
+                      00022 ;  VARIABLES RAM
+                      00023 ; ============================================================
+                      00024     ; Banco compartido 0x70-0x7F (16 bytes, acceso universal)
+                      00025     CBLOCK  0x70
+  00000070            00026         W_TEMP
+  00000071            00027         STATUS_TEMP
+  00000072            00028         PCLATH_TEMP         ; salva PCLATH en ISR
+  00000073            00029         DISP_DEC
+  00000074            00030         DISP_UNI
+  00000075            00031         NUM_DEC
+  00000076            00032         NUM_UNI
+  00000077            00033         MUX_FLAG
+  00000078            00034         JUGANDO
+  00000079            00035         TERMINADO
+  0000007A            00036         TICK_MUX
+  0000007B            00037         TICK_CENTI
+  0000007C            00038         CENTI_COUNT
+  0000007D            00039         LIMITE
+  0000007E            00040         RANGO_PREV
+  0000007F            00041         ESTABLE_COUNT
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  2
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+                      00042     ENDC
+                      00043 
+                      00044     ; Banco 0 GPR 0x20-0x21 (solo acceder desde banco 0)
+                      00045     CBLOCK  0x20
+  00000020            00046         TX_IDX
+  00000021            00047         TX_DATA
+                      00048     ENDC
+                      00049 
+                      00050 ; ============================================================
+                      00051 ;  VECTORES
+                      00052 ; ============================================================
+0000                  00053     ORG     0x0000
+0000   2811           00054     GOTO    INICIO
+                      00055 
+0004                  00056     ORG     0x0004
+0004   2952           00057     GOTO    ISR
+                      00058 
+                      00059 ; ============================================================
+                      00060 ;  TABLA 7 SEGMENTOS (cátodo común)
+                      00061 ; ============================================================
+0005                  00062 TABLA:
+0005   390F           00063     ANDLW   0x0F
+0006   0782           00064     ADDWF   PCL, F
+0007   343F           00065     RETLW   b'00111111'     ; 0
+0008   3406           00066     RETLW   b'00000110'     ; 1
+0009   345B           00067     RETLW   b'01011011'     ; 2
+000A   344F           00068     RETLW   b'01001111'     ; 3
+000B   3466           00069     RETLW   b'01100110'     ; 4
+000C   346D           00070     RETLW   b'01101101'     ; 5
+000D   347D           00071     RETLW   b'01111101'     ; 6
+000E   3407           00072     RETLW   b'00000111'     ; 7
+000F   347F           00073     RETLW   b'01111111'     ; 8
+0010   346F           00074     RETLW   b'01101111'     ; 9
+                      00075 
+                      00076 ; ============================================================
+                      00077 ;  INICIO
+                      00078 ; ============================================================
+0011                  00079 INICIO:
+0011   1683 1303      00080     BANKSEL OSCCON
+0013   3064           00081     MOVLW   b'01100100'
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0xf}.
+0014   008F           00082     MOVWF   OSCCON
+                      00083 
+0015   1683 1703      00084     BANKSEL ANSEL
+0017   3004           00085     MOVLW   b'00000100'
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x180, register{0x8}.
+0018   0088           00086     MOVWF   ANSEL
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x180, register{0x9}.
+0019   0189           00087     CLRF    ANSELH
+                      00088 
+001A   1683 1303      00089     BANKSEL TRISA
+001C   3004           00090     MOVLW   b'00000100'     ; RA2=entrada(pot)
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x5}.
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  3
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+001D   0085           00091     MOVWF   TRISA
+001E   1683 1303      00092     BANKSEL TRISB
+0020   3001           00093     MOVLW   b'00000001'     ; RB0=entrada(botón)
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x6}.
+0021   0086           00094     MOVWF   TRISB
+0022   1683 1303      00095     BANKSEL TRISD
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x8}.
+0024   0188           00096     CLRF    TRISD
+                      00097 
+0025   1683 1303      00098     BANKSEL TRISC
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x7}.
+0027   1307           00099     BCF     TRISC, 6        ; RC6=TX salida
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x7}.
+0028   1787           00100     BSF     TRISC, 7        ; RC7=RX entrada
+                      00101 
+0029   1283 1303      00102     BANKSEL PORTA
+002B   0185           00103     CLRF    PORTA
+002C   1283 1303      00104     BANKSEL PORTB
+002E   0186           00105     CLRF    PORTB
+002F   1283 1303      00106     BANKSEL PORTD
+0031   0188           00107     CLRF    PORTD
+                      00108 
+0032   1683 1303      00109     BANKSEL ADCON1
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x1f}.
+0034   019F           00110     CLRF    ADCON1
+0035   1283 1303      00111     BANKSEL ADCON0
+0037   3049           00112     MOVLW   b'01001001'     ; Fosc/8, canal AN2, ADC ON
+0038   009F           00113     MOVWF   ADCON0
+                      00114 
+                      00115     ; INTEDG=0 → RB0 flanco bajada; RBPU=0 → pull-ups ON; PS=1:64
+0039   1683 1303      00116     BANKSEL OPTION_REG
+003B   3005           00117     MOVLW   b'00000101'
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x1}.
+003C   0081           00118     MOVWF   OPTION_REG
+                      00119 
+003D   1283 1303      00120     BANKSEL TMR0
+003F   30B2           00121     MOVLW   d'178'          ; ~5ms
+0040   0081           00122     MOVWF   TMR0
+                      00123 
+                      00124     ; USART 9600,8N1
+0041   1683 1303      00125     BANKSEL SPBRG
+0043   3019           00126     MOVLW   d'25'
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x19}.
+0044   0099           00127     MOVWF   SPBRG
+0045   1283 1303      00128     BANKSEL RCSTA
+0047   3080           00129     MOVLW   b'10000000'     ; SPEN=1
+0048   0098           00130     MOVWF   RCSTA
+0049   1683 1303      00131     BANKSEL TXSTA
+004B   3024           00132     MOVLW   b'00100100'     ; TXEN=1, BRGH=1
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x18}.
+004C   0098           00133     MOVWF   TXSTA
+                      00134 
+                      00135     ; Inicializar variables (banco 0 para TX_IDX/TX_DATA)
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  4
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+004D   1283 1303      00136     BANKSEL PORTA
+004F   01A0           00137     CLRF    TX_IDX
+0050   01A1           00138     CLRF    TX_DATA
+0051   01F5           00139     CLRF    NUM_DEC
+0052   01F6           00140     CLRF    NUM_UNI
+0053   01F7           00141     CLRF    MUX_FLAG
+0054   01F8           00142     CLRF    JUGANDO
+0055   01F9           00143     CLRF    TERMINADO
+0056   01FA           00144     CLRF    TICK_MUX
+0057   01FB           00145     CLRF    TICK_CENTI
+0058   01FC           00146     CLRF    CENTI_COUNT
+0059   01FD           00147     CLRF    LIMITE
+005A   01FE           00148     CLRF    RANGO_PREV
+005B   01FF           00149     CLRF    ESTABLE_COUNT
+005C   01F2           00150     CLRF    PCLATH_TEMP
+005D   018A           00151     CLRF    PCLATH
+                      00152 
+005E   20A3           00153     CALL    CONV_DISPLAYS
+                      00154 
+005F   1283 1303      00155     BANKSEL INTCON
+0061   30B0           00156     MOVLW   b'10110000'     ; GIE=1, T0IE=1, INTE=1
+0062   008B           00157     MOVWF   INTCON
+                      00158 
+                      00159 ; ============================================================
+                      00160 ;  LOOP PRINCIPAL
+                      00161 ;  LEER_ADC solo se llama cuando se está esperando (no jugando
+                      00162 ;  ni congelado). Así los LEDs no cambian durante la prueba.
+                      00163 ; ============================================================
+0063                  00164 LOOP:
+0063   1879           00165     BTFSC   TERMINADO, 0
+0064   2863           00166     GOTO    LOOP            ; congelado → solo esperar IRQ RB0
+                      00167 
+0065   1878           00168     BTFSC   JUGANDO, 0
+0066   2863           00169     GOTO    LOOP            ; jugando  → solo esperar IRQ RB0/T0
+                      00170 
+                      00171     ; ESPERANDO: leer ADC, actualizar LEDs, detectar cambio rango
+0067   2070           00172     CALL    LEER_ADC        ; W = rango (1/2/3), actualiza LEDs
+0068   027E           00173     SUBWF   RANGO_PREV, W
+0069   1D03           00174     BTFSS   STATUS, Z
+006A   286C           00175     GOTO    RANGO_CAMBIO
+006B   2863           00176     GOTO    LOOP
+                      00177 
+006C                  00178 RANGO_CAMBIO:
+006C   2070           00179     CALL    LEER_ADC
+006D   00FE           00180     MOVWF   RANGO_PREV
+006E   01FF           00181     CLRF    ESTABLE_COUNT
+006F   2863           00182     GOTO    LOOP
+                      00183 
+                      00184 ; ============================================================
+                      00185 ;  LEER_ADC  – retorna rango en W (1/2/3) y enciende LED
+                      00186 ; ============================================================
+0070                  00187 LEER_ADC:
+0070   1283 1303      00188     BANKSEL ADCON0
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  5
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+0072   149F           00189     BSF     ADCON0, GO
+0073                  00190 WAIT_ADC:
+0073   189F           00191     BTFSC   ADCON0, GO
+0074   2873           00192     GOTO    WAIT_ADC
+                      00193 
+0075   081E           00194     MOVF    ADRESH, W
+0076   3C55           00195     SUBLW   d'85'
+0077   1C03           00196     BTFSS   STATUS, C
+0078   2880           00197     GOTO    ADC_VERDE
+                      00198 
+0079   1283 1303      00199     BANKSEL PORTA
+007B   1585           00200     BSF     PORTA, 3
+007C   1205           00201     BCF     PORTA, 4
+007D   1285           00202     BCF     PORTA, 5
+007E   3001           00203     MOVLW   d'1'
+007F   0008           00204     RETURN
+                      00205 
+0080                  00206 ADC_VERDE:
+0080   081E           00207     MOVF    ADRESH, W
+0081   3CAA           00208     SUBLW   d'170'
+0082   1C03           00209     BTFSS   STATUS, C
+0083   288B           00210     GOTO    ADC_AMARILLO
+                      00211 
+0084   1283 1303      00212     BANKSEL PORTA
+0086   1185           00213     BCF     PORTA, 3
+0087   1605           00214     BSF     PORTA, 4
+0088   1285           00215     BCF     PORTA, 5
+0089   3002           00216     MOVLW   d'2'
+008A   0008           00217     RETURN
+                      00218 
+008B                  00219 ADC_AMARILLO:
+008B   1283 1303      00220     BANKSEL PORTA
+008D   1185           00221     BCF     PORTA, 3
+008E   1205           00222     BCF     PORTA, 4
+008F   1685           00223     BSF     PORTA, 5
+0090   3003           00224     MOVLW   d'3'
+0091   0008           00225     RETURN
+                      00226 
+                      00227 ; ============================================================
+                      00228 ;  CARGAR_LIMITE  (unidad = 10ms = 1 centésima de segundo)
+                      00229 ;  Display muestra centésimas → valor × 10ms = tiempo real
+                      00230 ;  Rojo     25 × 10ms =  250ms  (joven)
+                      00231 ;  Verde    50 × 10ms =  500ms  (adulto mayor)
+                      00232 ;  Amarillo 75 × 10ms =  750ms  (paciente ACV)
+                      00233 ; ============================================================
+0092                  00234 CARGAR_LIMITE:
+0092   087E           00235     MOVF    RANGO_PREV, W
+0093   3C01           00236     SUBLW   d'1'
+0094   1D03           00237     BTFSS   STATUS, Z
+0095   2899           00238     GOTO    CL_VERDE
+0096   3019           00239     MOVLW   d'25'           ; 25 × 10ms = 250ms
+0097   00FD           00240     MOVWF   LIMITE
+0098   0008           00241     RETURN
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  6
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+0099                  00242 CL_VERDE:
+0099   087E           00243     MOVF    RANGO_PREV, W
+009A   3C02           00244     SUBLW   d'2'
+009B   1D03           00245     BTFSS   STATUS, Z
+009C   28A0           00246     GOTO    CL_AMARILLO
+009D   3032           00247     MOVLW   d'50'           ; 50 × 10ms = 500ms
+009E   00FD           00248     MOVWF   LIMITE
+009F   0008           00249     RETURN
+00A0                  00250 CL_AMARILLO:
+00A0   304B           00251     MOVLW   d'75'           ; 75 × 10ms = 750ms
+00A1   00FD           00252     MOVWF   LIMITE
+00A2   0008           00253     RETURN
+                      00254 
+                      00255 ; ============================================================
+                      00256 ;  CONV_DISPLAYS
+                      00257 ; ============================================================
+00A3                  00258 CONV_DISPLAYS:
+00A3   018A           00259     CLRF    PCLATH          ; TABLA está en página 0
+00A4   0875           00260     MOVF    NUM_DEC, W
+00A5   2005           00261     CALL    TABLA
+00A6   00F3           00262     MOVWF   DISP_DEC
+00A7   0876           00263     MOVF    NUM_UNI, W
+00A8   2005           00264     CALL    TABLA
+00A9   00F4           00265     MOVWF   DISP_UNI
+00AA   0008           00266     RETURN
+                      00267 
+                      00268 ; ============================================================
+                      00269 ;  RESET_TOTAL
+                      00270 ; ============================================================
+00AB                  00271 RESET_TOTAL:
+00AB   01F8           00272     CLRF    JUGANDO
+00AC   01F9           00273     CLRF    TERMINADO
+00AD   01F5           00274     CLRF    NUM_DEC
+00AE   01F6           00275     CLRF    NUM_UNI
+00AF   01FC           00276     CLRF    CENTI_COUNT
+00B0   01FB           00277     CLRF    TICK_CENTI
+00B1   01FA           00278     CLRF    TICK_MUX
+00B2   01FF           00279     CLRF    ESTABLE_COUNT
+00B3   01FD           00280     CLRF    LIMITE
+00B4   01FE           00281     CLRF    RANGO_PREV
+00B5   1283 1303      00282     BANKSEL PORTB
+00B7   1086           00283     BCF     PORTB, 1
+00B8   1283 1303      00284     BANKSEL PORTD
+00BA   0188           00285     CLRF    PORTD
+00BB   1283 1303      00286     BANKSEL PORTA
+00BD   1005           00287     BCF     PORTA, 0
+00BE   1085           00288     BCF     PORTA, 1
+00BF   20A3           00289     CALL    CONV_DISPLAYS
+00C0   0008           00290     RETURN
+                      00291 
+                      00292 ; ============================================================
+                      00293 ;  ARRANCAR_PRUEBA
+                      00294 ; ============================================================
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  7
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+00C1                  00295 ARRANCAR_PRUEBA:
+00C1   2092           00296     CALL    CARGAR_LIMITE
+00C2   01F5           00297     CLRF    NUM_DEC
+00C3   01F6           00298     CLRF    NUM_UNI
+00C4   01FC           00299     CLRF    CENTI_COUNT
+00C5   01FB           00300     CLRF    TICK_CENTI
+00C6   01FA           00301     CLRF    TICK_MUX
+00C7   20A3           00302     CALL    CONV_DISPLAYS
+                      00303     ; Rango estabilizado: avisar al operador antes de arrancar
+00C8   304C           00304     MOVLW   'L'
+00C9   20E4           00305     CALL    TX_BYTE
+00CA   3049           00306     MOVLW   'I'
+00CB   20E4           00307     CALL    TX_BYTE
+00CC   3053           00308     MOVLW   'S'
+00CD   20E4           00309     CALL    TX_BYTE
+00CE   3054           00310     MOVLW   'T'
+00CF   20E4           00311     CALL    TX_BYTE
+00D0   304F           00312     MOVLW   'O'
+00D1   20E4           00313     CALL    TX_BYTE
+00D2   300D           00314     MOVLW   0x0D
+00D3   20E4           00315     CALL    TX_BYTE
+00D4   300A           00316     MOVLW   0x0A
+00D5   20E4           00317     CALL    TX_BYTE
+00D6   1478           00318     BSF     JUGANDO, 0
+00D7   0008           00319     RETURN
+                      00320 
+                      00321 ; ============================================================
+                      00322 ;  TX_DIGITOS_CRLF  – envía NUM_DEC y NUM_UNI como ASCII + \r\n
+                      00323 ; ============================================================
+00D8                  00324 TX_DIGITOS_CRLF:
+00D8   018A           00325     CLRF    PCLATH
+00D9   0875           00326     MOVF    NUM_DEC, W
+00DA   3E30           00327     ADDLW   '0'
+00DB   20E4           00328     CALL    TX_BYTE
+00DC   0876           00329     MOVF    NUM_UNI, W
+00DD   3E30           00330     ADDLW   '0'
+00DE   20E4           00331     CALL    TX_BYTE
+00DF   300D           00332     MOVLW   0x0D
+00E0   20E4           00333     CALL    TX_BYTE
+00E1   300A           00334     MOVLW   0x0A
+00E2   20E4           00335     CALL    TX_BYTE
+00E3   0008           00336     RETURN
+                      00337 
+                      00338 ; ============================================================
+                      00339 ;  TX_BYTE  (banco 0 al entrar y al salir)
+                      00340 ; ============================================================
+00E4                  00341 TX_BYTE:
+00E4   00A1           00342     MOVWF   TX_DATA         ; TX_DATA en banco 0 (0x21)
+00E5                  00343 TX_BYTE_WAIT:
+00E5   1683 1303      00344     BANKSEL TXSTA
+Message[302]: Register in operand not in bank 0. Ensure that bank bits are correct. Bank_bits = 0x80, register{0x18}.
+00E7   1C98           00345     BTFSS   TXSTA, TRMT
+00E8   28E5           00346     GOTO    TX_BYTE_WAIT
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  8
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+00E9   1283 1303      00347     BANKSEL TXREG           ; vuelve a banco 0
+00EB   0821           00348     MOVF    TX_DATA, W
+00EC   0099           00349     MOVWF   TXREG
+00ED   0008           00350     RETURN
+                      00351 
+                      00352 ; ============================================================
+                      00353 ;  TX_NORMAL_POR_RANGO / TX_EXCEDIDO_POR_RANGO
+                      00354 ; ============================================================
+00EE                  00355 TX_NORMAL_POR_RANGO:
+00EE   087E           00356     MOVF    RANGO_PREV, W
+00EF   3C01           00357     SUBLW   d'1'
+00F0   1D03           00358     BTFSS   STATUS, Z
+00F1   28F5           00359     GOTO    TNR_R2
+00F2   2110           00360     CALL    TX_JOVEN_NORMAL
+00F3   20D8           00361     CALL    TX_DIGITOS_CRLF
+00F4   0008           00362     RETURN
+00F5                  00363 TNR_R2:
+00F5   087E           00364     MOVF    RANGO_PREV, W
+00F6   3C02           00365     SUBLW   d'2'
+00F7   1D03           00366     BTFSS   STATUS, Z
+00F8   28FC           00367     GOTO    TNR_R3
+00F9   2126           00368     CALL    TX_ADULTO_NORMAL
+00FA   20D8           00369     CALL    TX_DIGITOS_CRLF
+00FB   0008           00370     RETURN
+00FC                  00371 TNR_R3:
+00FC   213C           00372     CALL    TX_ACV_NORMAL
+00FD   20D8           00373     CALL    TX_DIGITOS_CRLF
+00FE   0008           00374     RETURN
+                      00375 
+00FF                  00376 TX_EXCEDIDO_POR_RANGO:
+00FF   087E           00377     MOVF    RANGO_PREV, W
+0100   3C01           00378     SUBLW   d'1'
+0101   1D03           00379     BTFSS   STATUS, Z
+0102   2906           00380     GOTO    TER_R2
+0103   211B           00381     CALL    TX_JOVEN_EXCEDIDO
+0104   20D8           00382     CALL    TX_DIGITOS_CRLF
+0105   0008           00383     RETURN
+0106                  00384 TER_R2:
+0106   087E           00385     MOVF    RANGO_PREV, W
+0107   3C02           00386     SUBLW   d'2'
+0108   1D03           00387     BTFSS   STATUS, Z
+0109   290D           00388     GOTO    TER_R3
+010A   2131           00389     CALL    TX_ADULTO_EXCEDIDO
+010B   20D8           00390     CALL    TX_DIGITOS_CRLF
+010C   0008           00391     RETURN
+010D                  00392 TER_R3:
+010D   2147           00393     CALL    TX_ACV_EXCEDIDO
+010E   20D8           00394     CALL    TX_DIGITOS_CRLF
+010F   0008           00395     RETURN
+                      00396 
+                      00397 ; ============================================================
+                      00398 ;  Rutinas TX por cadena (PCLATH se configura en cada una)
+                      00399 ; ============================================================
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE  9
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+0110                  00400 TX_JOVEN_NORMAL:
+0110   01A0           00401     CLRF    TX_IDX
+0111   3002           00402     MOVLW   0x02
+0112   008A           00403     MOVWF   PCLATH
+0113                  00404 TXJ_NRM_LP:
+0113   0820           00405     MOVF    TX_IDX, W
+0114   2200           00406     CALL    STR_JOVEN_NORMAL
+0115   39FF           00407     ANDLW   0xFF
+0116   1903           00408     BTFSC   STATUS, Z
+0117   0008           00409     RETURN
+0118   20E4           00410     CALL    TX_BYTE
+0119   0AA0           00411     INCF    TX_IDX, F
+011A   2913           00412     GOTO    TXJ_NRM_LP
+                      00413 
+011B                  00414 TX_JOVEN_EXCEDIDO:
+011B   01A0           00415     CLRF    TX_IDX
+011C   3002           00416     MOVLW   0x02
+011D   008A           00417     MOVWF   PCLATH
+011E                  00418 TXJ_EXC_LP:
+011E   0820           00419     MOVF    TX_IDX, W
+011F   2240           00420     CALL    STR_JOVEN_EXCEDIDO
+0120   39FF           00421     ANDLW   0xFF
+0121   1903           00422     BTFSC   STATUS, Z
+0122   0008           00423     RETURN
+0123   20E4           00424     CALL    TX_BYTE
+0124   0AA0           00425     INCF    TX_IDX, F
+0125   291E           00426     GOTO    TXJ_EXC_LP
+                      00427 
+0126                  00428 TX_ADULTO_NORMAL:
+0126   01A0           00429     CLRF    TX_IDX
+0127   3002           00430     MOVLW   0x02
+0128   008A           00431     MOVWF   PCLATH
+0129                  00432 TXA_NRM_LP:
+0129   0820           00433     MOVF    TX_IDX, W
+012A   2280           00434     CALL    STR_ADULTO_NORMAL
+012B   39FF           00435     ANDLW   0xFF
+012C   1903           00436     BTFSC   STATUS, Z
+012D   0008           00437     RETURN
+012E   20E4           00438     CALL    TX_BYTE
+012F   0AA0           00439     INCF    TX_IDX, F
+0130   2929           00440     GOTO    TXA_NRM_LP
+                      00441 
+0131                  00442 TX_ADULTO_EXCEDIDO:
+0131   01A0           00443     CLRF    TX_IDX
+0132   3002           00444     MOVLW   0x02
+0133   008A           00445     MOVWF   PCLATH
+0134                  00446 TXA_EXC_LP:
+0134   0820           00447     MOVF    TX_IDX, W
+0135   22C0           00448     CALL    STR_ADULTO_EXCEDIDO
+0136   39FF           00449     ANDLW   0xFF
+0137   1903           00450     BTFSC   STATUS, Z
+0138   0008           00451     RETURN
+0139   20E4           00452     CALL    TX_BYTE
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 10
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+013A   0AA0           00453     INCF    TX_IDX, F
+013B   2934           00454     GOTO    TXA_EXC_LP
+                      00455 
+013C                  00456 TX_ACV_NORMAL:
+013C   01A0           00457     CLRF    TX_IDX
+013D   3003           00458     MOVLW   0x03
+013E   008A           00459     MOVWF   PCLATH
+013F                  00460 TXACV_NRM_LP:
+013F   0820           00461     MOVF    TX_IDX, W
+0140   2300           00462     CALL    STR_ACV_NORMAL
+0141   39FF           00463     ANDLW   0xFF
+0142   1903           00464     BTFSC   STATUS, Z
+0143   0008           00465     RETURN
+0144   20E4           00466     CALL    TX_BYTE
+0145   0AA0           00467     INCF    TX_IDX, F
+0146   293F           00468     GOTO    TXACV_NRM_LP
+                      00469 
+0147                  00470 TX_ACV_EXCEDIDO:
+0147   01A0           00471     CLRF    TX_IDX
+0148   3003           00472     MOVLW   0x03
+0149   008A           00473     MOVWF   PCLATH
+014A                  00474 TXACV_EXC_LP:
+014A   0820           00475     MOVF    TX_IDX, W
+014B   2340           00476     CALL    STR_ACV_EXCEDIDO
+014C   39FF           00477     ANDLW   0xFF
+014D   1903           00478     BTFSC   STATUS, Z
+014E   0008           00479     RETURN
+014F   20E4           00480     CALL    TX_BYTE
+0150   0AA0           00481     INCF    TX_IDX, F
+0151   294A           00482     GOTO    TXACV_EXC_LP
+                      00483 
+                      00484 ; ============================================================
+                      00485 ;  ISR
+                      00486 ; ============================================================
+0152                  00487 ISR:
+0152   00F0           00488     MOVWF   W_TEMP
+0153   0E03           00489     SWAPF   STATUS, W
+0154   00F1           00490     MOVWF   STATUS_TEMP
+0155   080A           00491     MOVF    PCLATH, W       ; guardar PCLATH
+0156   00F2           00492     MOVWF   PCLATH_TEMP
+0157   018A           00493     CLRF    PCLATH          ; asegurar página 0 al inicio de ISR
+                      00494 
+                      00495     ; -------------------------------------------------------
+                      00496     ; 1. INTERRUPCIÓN EXTERNA RB0
+                      00497     ; -------------------------------------------------------
+0158   1283 1303      00498     BANKSEL INTCON
+015A   1C8B           00499     BTFSS   INTCON, INTF
+015B   2975           00500     GOTO    CHECK_TMR0
+                      00501 
+015C   1879           00502     BTFSC   TERMINADO, 0
+015D   2961           00503     GOTO    HACER_RESET
+                      00504 
+015E   1878           00505     BTFSC   JUGANDO, 0
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 11
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+015F   2967           00506     GOTO    CONGELAR_TIEMPO
+                      00507 
+0160   2971           00508     GOTO    CLEAR_INTF
+                      00509 
+0161                  00510 HACER_RESET:
+0161   20AB           00511     CALL    RESET_TOTAL
+0162                  00512 WAIT_REL_RST:
+0162   1283 1303      00513     BANKSEL PORTB
+0164   1C06           00514     BTFSS   PORTB, 0        ; esperar liberación (evita rebote)
+0165   2962           00515     GOTO    WAIT_REL_RST
+0166   2971           00516     GOTO    CLEAR_INTF
+                      00517 
+0167                  00518 CONGELAR_TIEMPO:
+0167   01F8           00519     CLRF    JUGANDO
+0168   1479           00520     BSF     TERMINADO, 0
+0169   1283 1303      00521     BANKSEL PORTB
+016B   1486           00522     BSF     PORTB, 1        ; RB1 fijo encendido
+016C   20EE           00523     CALL    TX_NORMAL_POR_RANGO
+016D                  00524 WAIT_REL_JUG:
+016D   1283 1303      00525     BANKSEL PORTB
+016F   1C06           00526     BTFSS   PORTB, 0        ; esperar liberación (evita rebote)
+0170   296D           00527     GOTO    WAIT_REL_JUG
+                      00528 
+0171                  00529 CLEAR_INTF:
+0171   1283 1303      00530     BANKSEL INTCON
+0173   108B           00531     BCF     INTCON, INTF
+0174   29D6           00532     GOTO    FIN_ISR
+                      00533 
+                      00534     ; -------------------------------------------------------
+                      00535     ; 2. INTERRUPCIÓN TIMER0 (~5ms)
+                      00536     ; -------------------------------------------------------
+0175                  00537 CHECK_TMR0:
+0175   1D0B           00538     BTFSS   INTCON, T0IF
+0176   29D6           00539     GOTO    FIN_ISR
+                      00540 
+0177   1283 1303      00541     BANKSEL TMR0
+0179   30B2           00542     MOVLW   d'178'
+017A   0081           00543     MOVWF   TMR0
+                      00544 
+                      00545     ; A) Multiplexado de displays
+017B   1283 1303      00546     BANKSEL PORTA
+017D   1005           00547     BCF     PORTA, 0
+017E   1085           00548     BCF     PORTA, 1
+                      00549 
+017F   08F8           00550     MOVF    JUGANDO, F
+0180   1D03           00551     BTFSS   STATUS, Z
+0181   2986           00552     GOTO    HACER_MUX
+0182   08F9           00553     MOVF    TERMINADO, F
+0183   1D03           00554     BTFSS   STATUS, Z
+0184   2986           00555     GOTO    HACER_MUX
+0185   2999           00556     GOTO    LOGICA_ESTABILIDAD
+                      00557 
+0186                  00558 HACER_MUX:
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 12
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+0186   1877           00559     BTFSC   MUX_FLAG, 0
+0187   2991           00560     GOTO    MUX_UNI
+                      00561 
+0188                  00562 MUX_DEC:
+0188   1283 1303      00563     BANKSEL PORTD
+018A   0873           00564     MOVF    DISP_DEC, W
+018B   0088           00565     MOVWF   PORTD
+018C   1283 1303      00566     BANKSEL PORTA
+018E   1405           00567     BSF     PORTA, 0
+018F   1477           00568     BSF     MUX_FLAG, 0
+0190   2999           00569     GOTO    LOGICA_ESTABILIDAD
+                      00570 
+0191                  00571 MUX_UNI:
+0191   1283 1303      00572     BANKSEL PORTD
+0193   0874           00573     MOVF    DISP_UNI, W
+0194   0088           00574     MOVWF   PORTD
+0195   1283 1303      00575     BANKSEL PORTA
+0197   1485           00576     BSF     PORTA, 1
+0198   1077           00577     BCF     MUX_FLAG, 0
+                      00578 
+                      00579     ; B) Estabilidad ADC (solo en espera)
+0199                  00580 LOGICA_ESTABILIDAD:
+0199   08F8           00581     MOVF    JUGANDO, F
+019A   1D03           00582     BTFSS   STATUS, Z
+019B   29A9           00583     GOTO    LOGICA_JUEGO
+019C   08F9           00584     MOVF    TERMINADO, F
+019D   1D03           00585     BTFSS   STATUS, Z
+019E   29A9           00586     GOTO    LOGICA_JUEGO
+                      00587 
+019F   08FE           00588     MOVF    RANGO_PREV, F
+01A0   1903           00589     BTFSC   STATUS, Z
+01A1   29A9           00590     GOTO    LOGICA_JUEGO
+                      00591 
+01A2   0AFF           00592     INCF    ESTABLE_COUNT, F
+01A3   30C8           00593     MOVLW   d'200'
+01A4   027F           00594     SUBWF   ESTABLE_COUNT, W
+01A5   1D03           00595     BTFSS   STATUS, Z
+01A6   29A9           00596     GOTO    LOGICA_JUEGO
+                      00597 
+01A7   20C1           00598     CALL    ARRANCAR_PRUEBA
+01A8   29D3           00599     GOTO    CLEAR_T0IF
+                      00600 
+                      00601     ; C) Lógica de juego
+01A9                  00602 LOGICA_JUEGO:
+01A9   1C78           00603     BTFSS   JUGANDO, 0
+01AA   29D3           00604     GOTO    CLEAR_T0IF
+                      00605 
+                      00606     ; Parpadeo RB1 cada 4×5ms = 20ms
+01AB   0AFA           00607     INCF    TICK_MUX, F
+01AC   3004           00608     MOVLW   d'4'
+01AD   027A           00609     SUBWF   TICK_MUX, W
+01AE   1D03           00610     BTFSS   STATUS, Z
+01AF   29B5           00611     GOTO    LOGICA_CENTI
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 13
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+01B0   01FA           00612     CLRF    TICK_MUX
+01B1   1283 1303      00613     BANKSEL PORTB
+01B3   3002           00614     MOVLW   b'00000010'
+01B4   0686           00615     XORWF   PORTB, F
+                      00616 
+                      00617     ; Unidad display cada 2×5ms = 10ms (1 centésima de segundo)
+01B5                  00618 LOGICA_CENTI:
+01B5   0AFB           00619     INCF    TICK_CENTI, F
+01B6   3002           00620     MOVLW   d'2'
+01B7   027B           00621     SUBWF   TICK_CENTI, W
+01B8   1D03           00622     BTFSS   STATUS, Z
+01B9   29D3           00623     GOTO    CLEAR_T0IF
+                      00624 
+01BA   01FB           00625     CLRF    TICK_CENTI
+01BB   0AFC           00626     INCF    CENTI_COUNT, F
+                      00627 
+01BC   0AF6           00628     INCF    NUM_UNI, F
+01BD   300A           00629     MOVLW   d'10'
+01BE   0276           00630     SUBWF   NUM_UNI, W
+01BF   1D03           00631     BTFSS   STATUS, Z
+01C0   29C8           00632     GOTO    CHK_LIMITE
+01C1   01F6           00633     CLRF    NUM_UNI
+01C2   0AF5           00634     INCF    NUM_DEC, F
+01C3   300A           00635     MOVLW   d'10'
+01C4   0275           00636     SUBWF   NUM_DEC, W
+01C5   1D03           00637     BTFSS   STATUS, Z
+01C6   29C8           00638     GOTO    CHK_LIMITE
+01C7   01F5           00639     CLRF    NUM_DEC
+                      00640 
+01C8                  00641 CHK_LIMITE:
+01C8   087D           00642     MOVF    LIMITE, W
+01C9   027C           00643     SUBWF   CENTI_COUNT, W
+01CA   1D03           00644     BTFSS   STATUS, Z
+01CB   29D2           00645     GOTO    ACT_DISPLAYS
+                      00646 
+                      00647     ; Tiempo agotado: congelar y enviar desaprobado
+01CC   01F8           00648     CLRF    JUGANDO
+01CD   1479           00649     BSF     TERMINADO, 0
+01CE   1283 1303      00650     BANKSEL PORTB
+01D0   1486           00651     BSF     PORTB, 1
+01D1   20FF           00652     CALL    TX_EXCEDIDO_POR_RANGO
+                      00653 
+01D2                  00654 ACT_DISPLAYS:
+01D2   20A3           00655     CALL    CONV_DISPLAYS
+                      00656 
+01D3                  00657 CLEAR_T0IF:
+01D3   1283 1303      00658     BANKSEL INTCON
+01D5   110B           00659     BCF     INTCON, T0IF
+                      00660 
+01D6                  00661 FIN_ISR:
+01D6   0872           00662     MOVF    PCLATH_TEMP, W  ; restaurar PCLATH
+01D7   008A           00663     MOVWF   PCLATH
+01D8   0E71           00664     SWAPF   STATUS_TEMP, W
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 14
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+01D9   0083           00665     MOVWF   STATUS
+01DA   0EF0           00666     SWAPF   W_TEMP, F
+01DB   0E70           00667     SWAPF   W_TEMP, W
+01DC   0009           00668     RETFIE
+                      00669 
+                      00670 ; ============================================================
+                      00671 ;  TABLAS DE CADENAS (ORG alineados a 64 palabras)
+                      00672 ; ============================================================
+                      00673 
+0200                  00674     ORG     0x200
+0200                  00675 STR_JOVEN_NORMAL:
+0200   391F           00676     ANDLW   0x1F
+0201   0782           00677     ADDWF   PCL, F
+0202   344A           00678     RETLW   'J'
+0203   346F           00679     RETLW   'o'
+0204   3476           00680     RETLW   'v'
+0205   3465           00681     RETLW   'e'
+0206   346E           00682     RETLW   'n'
+0207   3420           00683     RETLW   ' '
+0208   347C           00684     RETLW   '|'
+0209   3420           00685     RETLW   ' '
+020A   3450           00686     RETLW   'P'
+020B   3472           00687     RETLW   'r'
+020C   3475           00688     RETLW   'u'
+020D   3465           00689     RETLW   'e'
+020E   3462           00690     RETLW   'b'
+020F   3461           00691     RETLW   'a'
+0210   3420           00692     RETLW   ' '
+0211   3461           00693     RETLW   'a'
+0212   3470           00694     RETLW   'p'
+0213   3472           00695     RETLW   'r'
+0214   346F           00696     RETLW   'o'
+0215   3462           00697     RETLW   'b'
+0216   3461           00698     RETLW   'a'
+0217   3464           00699     RETLW   'd'
+0218   3461           00700     RETLW   'a'
+0219   3420           00701     RETLW   ' '
+021A   347C           00702     RETLW   '|'
+021B   3420           00703     RETLW   ' '
+021C   3400           00704     RETLW   0x00
+                      00705 
+0240                  00706     ORG     0x240
+0240                  00707 STR_JOVEN_EXCEDIDO:
+0240   391F           00708     ANDLW   0x1F
+0241   0782           00709     ADDWF   PCL, F
+0242   344A           00710     RETLW   'J'
+0243   346F           00711     RETLW   'o'
+0244   3476           00712     RETLW   'v'
+0245   3465           00713     RETLW   'e'
+0246   346E           00714     RETLW   'n'
+0247   3420           00715     RETLW   ' '
+0248   347C           00716     RETLW   '|'
+0249   3420           00717     RETLW   ' '
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 15
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+024A   3450           00718     RETLW   'P'
+024B   3472           00719     RETLW   'r'
+024C   3475           00720     RETLW   'u'
+024D   3465           00721     RETLW   'e'
+024E   3462           00722     RETLW   'b'
+024F   3461           00723     RETLW   'a'
+0250   3420           00724     RETLW   ' '
+0251   3464           00725     RETLW   'd'
+0252   3465           00726     RETLW   'e'
+0253   3473           00727     RETLW   's'
+0254   3461           00728     RETLW   'a'
+0255   3470           00729     RETLW   'p'
+0256   3472           00730     RETLW   'r'
+0257   346F           00731     RETLW   'o'
+0258   3462           00732     RETLW   'b'
+0259   3461           00733     RETLW   'a'
+025A   3464           00734     RETLW   'd'
+025B   3461           00735     RETLW   'a'
+025C   3420           00736     RETLW   ' '
+025D   347C           00737     RETLW   '|'
+025E   3420           00738     RETLW   ' '
+025F   3400           00739     RETLW   0x00
+                      00740 
+0280                  00741     ORG     0x280
+0280                  00742 STR_ADULTO_NORMAL:
+0280   393F           00743     ANDLW   0x3F
+0281   0782           00744     ADDWF   PCL, F
+0282   3441           00745     RETLW   'A'
+0283   3464           00746     RETLW   'd'
+0284   3475           00747     RETLW   'u'
+0285   346C           00748     RETLW   'l'
+0286   3474           00749     RETLW   't'
+0287   346F           00750     RETLW   'o'
+0288   3420           00751     RETLW   ' '
+0289   346D           00752     RETLW   'm'
+028A   3461           00753     RETLW   'a'
+028B   3479           00754     RETLW   'y'
+028C   346F           00755     RETLW   'o'
+028D   3472           00756     RETLW   'r'
+028E   3420           00757     RETLW   ' '
+028F   347C           00758     RETLW   '|'
+0290   3420           00759     RETLW   ' '
+0291   3450           00760     RETLW   'P'
+0292   3472           00761     RETLW   'r'
+0293   3475           00762     RETLW   'u'
+0294   3465           00763     RETLW   'e'
+0295   3462           00764     RETLW   'b'
+0296   3461           00765     RETLW   'a'
+0297   3420           00766     RETLW   ' '
+0298   3461           00767     RETLW   'a'
+0299   3470           00768     RETLW   'p'
+029A   3472           00769     RETLW   'r'
+029B   346F           00770     RETLW   'o'
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 16
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+029C   3462           00771     RETLW   'b'
+029D   3461           00772     RETLW   'a'
+029E   3464           00773     RETLW   'd'
+029F   3461           00774     RETLW   'a'
+02A0   3420           00775     RETLW   ' '
+02A1   347C           00776     RETLW   '|'
+02A2   3420           00777     RETLW   ' '
+02A3   3400           00778     RETLW   0x00
+                      00779 
+02C0                  00780     ORG     0x2C0
+02C0                  00781 STR_ADULTO_EXCEDIDO:
+02C0   393F           00782     ANDLW   0x3F
+02C1   0782           00783     ADDWF   PCL, F
+02C2   3441           00784     RETLW   'A'
+02C3   3464           00785     RETLW   'd'
+02C4   3475           00786     RETLW   'u'
+02C5   346C           00787     RETLW   'l'
+02C6   3474           00788     RETLW   't'
+02C7   346F           00789     RETLW   'o'
+02C8   3420           00790     RETLW   ' '
+02C9   346D           00791     RETLW   'm'
+02CA   3461           00792     RETLW   'a'
+02CB   3479           00793     RETLW   'y'
+02CC   346F           00794     RETLW   'o'
+02CD   3472           00795     RETLW   'r'
+02CE   3420           00796     RETLW   ' '
+02CF   347C           00797     RETLW   '|'
+02D0   3420           00798     RETLW   ' '
+02D1   3450           00799     RETLW   'P'
+02D2   3472           00800     RETLW   'r'
+02D3   3475           00801     RETLW   'u'
+02D4   3465           00802     RETLW   'e'
+02D5   3462           00803     RETLW   'b'
+02D6   3461           00804     RETLW   'a'
+02D7   3420           00805     RETLW   ' '
+02D8   3464           00806     RETLW   'd'
+02D9   3465           00807     RETLW   'e'
+02DA   3473           00808     RETLW   's'
+02DB   3461           00809     RETLW   'a'
+02DC   3470           00810     RETLW   'p'
+02DD   3472           00811     RETLW   'r'
+02DE   346F           00812     RETLW   'o'
+02DF   3462           00813     RETLW   'b'
+02E0   3461           00814     RETLW   'a'
+02E1   3464           00815     RETLW   'd'
+02E2   3461           00816     RETLW   'a'
+02E3   3420           00817     RETLW   ' '
+02E4   347C           00818     RETLW   '|'
+02E5   3420           00819     RETLW   ' '
+02E6   3400           00820     RETLW   0x00
+                      00821 
+0300                  00822     ORG     0x300
+0300                  00823 STR_ACV_NORMAL:
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 17
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+0300   393F           00824     ANDLW   0x3F
+0301   0782           00825     ADDWF   PCL, F
+0302   3450           00826     RETLW   'P'
+0303   3461           00827     RETLW   'a'
+0304   3463           00828     RETLW   'c'
+0305   3469           00829     RETLW   'i'
+0306   3465           00830     RETLW   'e'
+0307   346E           00831     RETLW   'n'
+0308   3474           00832     RETLW   't'
+0309   3465           00833     RETLW   'e'
+030A   3420           00834     RETLW   ' '
+030B   3441           00835     RETLW   'A'
+030C   3443           00836     RETLW   'C'
+030D   3456           00837     RETLW   'V'
+030E   3420           00838     RETLW   ' '
+030F   347C           00839     RETLW   '|'
+0310   3420           00840     RETLW   ' '
+0311   3450           00841     RETLW   'P'
+0312   3472           00842     RETLW   'r'
+0313   3475           00843     RETLW   'u'
+0314   3465           00844     RETLW   'e'
+0315   3462           00845     RETLW   'b'
+0316   3461           00846     RETLW   'a'
+0317   3420           00847     RETLW   ' '
+0318   3461           00848     RETLW   'a'
+0319   3470           00849     RETLW   'p'
+031A   3472           00850     RETLW   'r'
+031B   346F           00851     RETLW   'o'
+031C   3462           00852     RETLW   'b'
+031D   3461           00853     RETLW   'a'
+031E   3464           00854     RETLW   'd'
+031F   3461           00855     RETLW   'a'
+0320   3420           00856     RETLW   ' '
+0321   347C           00857     RETLW   '|'
+0322   3420           00858     RETLW   ' '
+0323   3400           00859     RETLW   0x00
+                      00860 
+0340                  00861     ORG     0x340
+0340                  00862 STR_ACV_EXCEDIDO:
+0340   393F           00863     ANDLW   0x3F
+0341   0782           00864     ADDWF   PCL, F
+0342   3450           00865     RETLW   'P'
+0343   3461           00866     RETLW   'a'
+0344   3463           00867     RETLW   'c'
+0345   3469           00868     RETLW   'i'
+0346   3465           00869     RETLW   'e'
+0347   346E           00870     RETLW   'n'
+0348   3474           00871     RETLW   't'
+0349   3465           00872     RETLW   'e'
+034A   3420           00873     RETLW   ' '
+034B   3441           00874     RETLW   'A'
+034C   3443           00875     RETLW   'C'
+034D   3456           00876     RETLW   'V'
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 18
+
+
+LOC    OBJECT CODE    LINE  SOURCE TEXT
+  VALUE
+
+034E   3420           00877     RETLW   ' '
+034F   347C           00878     RETLW   '|'
+0350   3420           00879     RETLW   ' '
+0351   3450           00880     RETLW   'P'
+0352   3472           00881     RETLW   'r'
+0353   3475           00882     RETLW   'u'
+0354   3465           00883     RETLW   'e'
+0355   3462           00884     RETLW   'b'
+0356   3461           00885     RETLW   'a'
+0357   3420           00886     RETLW   ' '
+0358   3464           00887     RETLW   'd'
+0359   3465           00888     RETLW   'e'
+035A   3473           00889     RETLW   's'
+035B   3461           00890     RETLW   'a'
+035C   3470           00891     RETLW   'p'
+035D   3472           00892     RETLW   'r'
+035E   346F           00893     RETLW   'o'
+035F   3462           00894     RETLW   'b'
+0360   3461           00895     RETLW   'a'
+0361   3464           00896     RETLW   'd'
+0362   3461           00897     RETLW   'a'
+0363   3420           00898     RETLW   ' '
+0364   347C           00899     RETLW   '|'
+0365   3420           00900     RETLW   ' '
+0366   3400           00901     RETLW   0x00
+                      00902 
+                      00903     END
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 19
+
+
+SYMBOL TABLE
+  LABEL                             VALUE
+
+ABDEN                             00000000
+ABDOVF                            00000007
+ACKDT                             00000005
+ACKEN                             00000004
+ACKSTAT                           00000006
+ACT_DISPLAYS                      000001D2
+ADCON0                            0000001F
+ADCON1                            0000009F
+ADCS0                             00000006
+ADCS1                             00000007
+ADC_AMARILLO                      0000008B
+ADC_VERDE                         00000080
+ADDEN                             00000003
+ADFM                              00000007
+ADIE                              00000006
+ADIF                              00000006
+ADON                              00000000
+ADRESH                            0000001E
+ADRESL                            0000009E
+ANS0                              00000000
+ANS1                              00000001
+ANS10                             00000002
+ANS11                             00000003
+ANS12                             00000004
+ANS13                             00000005
+ANS2                              00000002
+ANS3                              00000003
+ANS4                              00000004
+ANS5                              00000005
+ANS6                              00000006
+ANS7                              00000007
+ANS8                              00000000
+ANS9                              00000001
+ANSEL                             00000188
+ANSELH                            00000189
+ARRANCAR_PRUEBA                   000000C1
+BAUDCTL                           00000187
+BCLIE                             00000003
+BCLIF                             00000003
+BF                                00000000
+BRG0                              00000000
+BRG1                              00000001
+BRG10                             00000002
+BRG11                             00000003
+BRG12                             00000004
+BRG13                             00000005
+BRG14                             00000006
+BRG15                             00000007
+BRG16                             00000003
+BRG2                              00000002
+BRG3                              00000003
+BRG4                              00000004
+BRG5                              00000005
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 20
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+BRG6                              00000006
+BRG7                              00000007
+BRG8                              00000000
+BRG9                              00000001
+BRGH                              00000002
+C                                 00000000
+C1CH0                             00000000
+C1CH1                             00000001
+C1IE                              00000005
+C1IF                              00000005
+C1OE                              00000005
+C1ON                              00000007
+C1OUT                             00000006
+C1POL                             00000004
+C1R                               00000002
+C1RSEL                            00000005
+C1SEN                             00000005
+C2CH0                             00000000
+C2CH1                             00000001
+C2IE                              00000006
+C2IF                              00000006
+C2OE                              00000005
+C2ON                              00000007
+C2OUT                             00000006
+C2POL                             00000004
+C2R                               00000002
+C2REN                             00000004
+C2RSEL                            00000004
+C2SYNC                            00000000
+CARGAR_LIMITE                     00000092
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             00000005
+CCP1Y                             00000004
+CCP2CON                           0000001D
+CCP2IE                            00000000
+CCP2IF                            00000000
+CCP2M0                            00000000
+CCP2M1                            00000001
+CCP2M2                            00000002
+CCP2M3                            00000003
+CCP2X                             00000005
+CCP2Y                             00000004
+CCPR1                             00000015
+CCPR1H                            00000016
+CCPR1L                            00000015
+CCPR2                             0000001B
+CCPR2H                            0000001C
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 21
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+CCPR2L                            0000001B
+CENTI_COUNT                       0000007C
+CHECK_TMR0                        00000175
+CHK_LIMITE                        000001C8
+CHS0                              00000002
+CHS1                              00000003
+CHS2                              00000004
+CHS3                              00000005
+CKE                               00000006
+CKP                               00000004
+CLEAR_INTF                        00000171
+CLEAR_T0IF                        000001D3
+CL_AMARILLO                       000000A0
+CL_VERDE                          00000099
+CM1CON0                           00000107
+CM2CON0                           00000108
+CM2CON1                           00000109
+CONGELAR_TIEMPO                   00000167
+CONV_DISPLAYS                     000000A3
+CREN                              00000004
+CSRC                              00000007
+D                                 00000005
+DATA_ADDRESS                      00000005
+DC                                00000001
+DC1B0                             00000004
+DC1B1                             00000005
+DC2B0                             00000004
+DC2B1                             00000005
+DISP_DEC                          00000073
+DISP_UNI                          00000074
+D_A                               00000005
+D_NOT_A                           00000005
+ECCPAS                            0000009C
+ECCPAS0                           00000004
+ECCPAS1                           00000005
+ECCPAS2                           00000006
+ECCPASE                           00000007
+EEADR                             0000010D
+EEADRH                            0000010F
+EECON1                            0000018C
+EECON2                            0000018D
+EEDAT                             0000010C
+EEDATA                            0000010C
+EEDATH                            0000010E
+EEIE                              00000004
+EEIF                              00000004
+EEPGD                             00000007
+ESTABLE_COUNT                     0000007F
+F                                 00000001
+FERR                              00000002
+FIN_ISR                           000001D6
+FSR                               00000004
+FVREN                             00000000
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 22
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+GCEN                              00000007
+GIE                               00000007
+GO                                00000001
+GO_DONE                           00000001
+GO_NOT_DONE                       00000001
+HACER_MUX                         00000186
+HACER_RESET                       00000161
+HTS                               00000002
+I2C_DATA                          00000005
+I2C_READ                          00000002
+I2C_START                         00000003
+I2C_STOP                          00000004
+INDF                              00000000
+INICIO                            00000011
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTF                              00000001
+IOCB                              00000096
+IOCB0                             00000000
+IOCB1                             00000001
+IOCB2                             00000002
+IOCB3                             00000003
+IOCB4                             00000004
+IOCB5                             00000005
+IOCB6                             00000006
+IOCB7                             00000007
+IRCF0                             00000004
+IRCF1                             00000005
+IRCF2                             00000006
+IRP                               00000007
+ISR                               00000152
+JUGANDO                           00000078
+LEER_ADC                          00000070
+LIMITE                            0000007D
+LOGICA_CENTI                      000001B5
+LOGICA_ESTABILIDAD                00000199
+LOGICA_JUEGO                      000001A9
+LOOP                              00000063
+LTS                               00000001
+MC1OUT                            00000007
+MC2OUT                            00000006
+MSK                               00000093
+MSK0                              00000000
+MSK1                              00000001
+MSK2                              00000002
+MSK3                              00000003
+MSK4                              00000004
+MSK5                              00000005
+MSK6                              00000006
+MSK7                              00000007
+MUX_DEC                           00000188
+MUX_FLAG                          00000077
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 23
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+MUX_UNI                           00000191
+NOT_A                             00000005
+NOT_ADDRESS                       00000005
+NOT_BO                            00000000
+NOT_BOR                           00000000
+NOT_DONE                          00000001
+NOT_PD                            00000003
+NOT_POR                           00000001
+NOT_RBPU                          00000007
+NOT_RC8                           00000006
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+NOT_TX8                           00000006
+NOT_W                             00000002
+NOT_WRITE                         00000002
+NUM_DEC                           00000075
+NUM_UNI                           00000076
+OERR                              00000001
+OPTION_REG                        00000081
+OSCCON                            0000008F
+OSCTUNE                           00000090
+OSFIE                             00000007
+OSFIF                             00000007
+OSTS                              00000003
+P                                 00000004
+P1M0                              00000006
+P1M1                              00000007
+PCL                               00000002
+PCLATH                            0000000A
+PCLATH_TEMP                       00000072
+PCON                              0000008E
+PDC0                              00000000
+PDC1                              00000001
+PDC2                              00000002
+PDC3                              00000003
+PDC4                              00000004
+PDC5                              00000005
+PDC6                              00000006
+PEIE                              00000006
+PEN                               00000002
+PIE1                              0000008C
+PIE2                              0000008D
+PIR1                              0000000C
+PIR2                              0000000D
+PORTA                             00000005
+PORTB                             00000006
+PORTC                             00000007
+PORTD                             00000008
+PORTE                             00000009
+PR2                               00000092
+PRSEN                             00000007
+PS0                               00000000
+PS1                               00000001
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 24
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+PS2                               00000002
+PSA                               00000003
+PSSAC0                            00000002
+PSSAC1                            00000003
+PSSBD0                            00000000
+PSSBD1                            00000001
+PSTRCON                           0000009D
+PULSR                             00000002
+PULSS                             00000003
+PWM1CON                           0000009B
+R                                 00000002
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+RA6                               00000006
+RA7                               00000007
+RANGO_CAMBIO                      0000006C
+RANGO_PREV                        0000007E
+RB0                               00000000
+RB1                               00000001
+RB2                               00000002
+RB3                               00000003
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RBIE                              00000003
+RBIF                              00000000
+RC0                               00000000
+RC1                               00000001
+RC2                               00000002
+RC3                               00000003
+RC4                               00000004
+RC5                               00000005
+RC6                               00000006
+RC7                               00000007
+RC8_9                             00000006
+RC9                               00000006
+RCD8                              00000000
+RCEN                              00000003
+RCIDL                             00000006
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+RCSTA                             00000018
+RD                                00000000
+RD0                               00000000
+RD1                               00000001
+RD2                               00000002
+RD3                               00000003
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 25
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+RD4                               00000004
+RD5                               00000005
+RD6                               00000006
+RD7                               00000007
+RE0                               00000000
+RE1                               00000001
+RE2                               00000002
+RE3                               00000003
+READ_WRITE                        00000002
+RESET_TOTAL                       000000AB
+RP0                               00000005
+RP1                               00000006
+RSEN                              00000001
+RX9                               00000006
+RX9D                              00000000
+R_NOT_W                           00000002
+R_W                               00000002
+S                                 00000003
+SBOREN                            00000004
+SCKP                              00000004
+SCS                               00000000
+SEN                               00000000
+SENDB                             00000003
+SMP                               00000007
+SPBRG                             00000099
+SPBRGH                            0000009A
+SPEN                              00000007
+SR0                               00000006
+SR1                               00000007
+SRCON                             00000185
+SREN                              00000005
+SSPADD                            00000093
+SSPBUF                            00000013
+SSPCON                            00000014
+SSPCON2                           00000091
+SSPEN                             00000005
+SSPIE                             00000003
+SSPIF                             00000003
+SSPM0                             00000000
+SSPM1                             00000001
+SSPM2                             00000002
+SSPM3                             00000003
+SSPMSK                            00000093
+SSPOV                             00000006
+SSPSTAT                           00000094
+STATUS                            00000003
+STATUS_TEMP                       00000071
+STRA                              00000000
+STRB                              00000001
+STRC                              00000002
+STRD                              00000003
+STRSYNC                           00000004
+STR_ACV_EXCEDIDO                  00000340
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 26
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+STR_ACV_NORMAL                    00000300
+STR_ADULTO_EXCEDIDO               000002C0
+STR_ADULTO_NORMAL                 00000280
+STR_JOVEN_EXCEDIDO                00000240
+STR_JOVEN_NORMAL                  00000200
+SWDTEN                            00000000
+SYNC                              00000004
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1GINV                            00000007
+T1GIV                             00000007
+T1GSS                             00000001
+T1INSYNC                          00000002
+T1OSCEN                           00000003
+T1SYNC                            00000002
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000012
+TABLA                             00000005
+TERMINADO                         00000079
+TER_R2                            00000106
+TER_R3                            0000010D
+TICK_CENTI                        0000007B
+TICK_MUX                          0000007A
+TMR0                              00000001
+TMR0IE                            00000005
+TMR0IF                            00000002
+TMR1                              0000000E
+TMR1CS                            00000001
+TMR1GE                            00000006
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TNR_R2                            000000F5
+TNR_R3                            000000FC
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TRISA                             00000085
+TRISA0                            00000000
+TRISA1                            00000001
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 27
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TRISA2                            00000002
+TRISA3                            00000003
+TRISA4                            00000004
+TRISA5                            00000005
+TRISA6                            00000006
+TRISA7                            00000007
+TRISB                             00000086
+TRISB0                            00000000
+TRISB1                            00000001
+TRISB2                            00000002
+TRISB3                            00000003
+TRISB4                            00000004
+TRISB5                            00000005
+TRISB6                            00000006
+TRISB7                            00000007
+TRISC                             00000087
+TRISC0                            00000000
+TRISC1                            00000001
+TRISC2                            00000002
+TRISC3                            00000003
+TRISC4                            00000004
+TRISC5                            00000005
+TRISC6                            00000006
+TRISC7                            00000007
+TRISD                             00000088
+TRISD0                            00000000
+TRISD1                            00000001
+TRISD2                            00000002
+TRISD3                            00000003
+TRISD4                            00000004
+TRISD5                            00000005
+TRISD6                            00000006
+TRISD7                            00000007
+TRISE                             00000089
+TRISE0                            00000000
+TRISE1                            00000001
+TRISE2                            00000002
+TRISE3                            00000003
+TRMT                              00000001
+TUN0                              00000000
+TUN1                              00000001
+TUN2                              00000002
+TUN3                              00000003
+TUN4                              00000004
+TX8_9                             00000006
+TX9                               00000006
+TX9D                              00000000
+TXACV_EXC_LP                      0000014A
+TXACV_NRM_LP                      0000013F
+TXA_EXC_LP                        00000134
+TXA_NRM_LP                        00000129
+TXD8                              00000000
+TXEN                              00000005
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 28
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TXIE                              00000004
+TXIF                              00000004
+TXJ_EXC_LP                        0000011E
+TXJ_NRM_LP                        00000113
+TXREG                             00000019
+TXSTA                             00000098
+TX_ACV_EXCEDIDO                   00000147
+TX_ACV_NORMAL                     0000013C
+TX_ADULTO_EXCEDIDO                00000131
+TX_ADULTO_NORMAL                  00000126
+TX_BYTE                           000000E4
+TX_BYTE_WAIT                      000000E5
+TX_DATA                           00000021
+TX_DIGITOS_CRLF                   000000D8
+TX_EXCEDIDO_POR_RANGO             000000FF
+TX_IDX                            00000020
+TX_JOVEN_EXCEDIDO                 0000011B
+TX_JOVEN_NORMAL                   00000110
+TX_NORMAL_POR_RANGO               000000EE
+UA                                00000001
+ULPWUE                            00000005
+ULPWUIE                           00000002
+ULPWUIF                           00000002
+VCFG0                             00000004
+VCFG1                             00000005
+VR0                               00000000
+VR1                               00000001
+VR2                               00000002
+VR3                               00000003
+VRCON                             00000097
+VREN                              00000007
+VROE                              00000006
+VRR                               00000005
+VRSS                              00000004
+W                                 00000000
+WAIT_ADC                          00000073
+WAIT_REL_JUG                      0000016D
+WAIT_REL_RST                      00000162
+WCOL                              00000007
+WDTCON                            00000105
+WDTPS0                            00000001
+WDTPS1                            00000002
+WDTPS2                            00000003
+WDTPS3                            00000004
+WPUB                              00000095
+WPUB0                             00000000
+WPUB1                             00000001
+WPUB2                             00000002
+WPUB3                             00000003
+WPUB4                             00000004
+WPUB5                             00000005
+WPUB6                             00000006
+WPUB7                             00000007
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 29
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+WR                                00000001
+WREN                              00000002
+WRERR                             00000003
+WUE                               00000001
+W_TEMP                            00000070
+Z                                 00000002
+_BOR21V                           00003EFF
+_BOR40V                           00003FFF
+_BOR4V_BOR21V                     00003EFF
+_BOR4V_BOR40V                     00003FFF
+_BOREN_NSLEEP                     00003EFF
+_BOREN_OFF                        00003CFF
+_BOREN_ON                         00003FFF
+_BOREN_SBODEN                     00003DFF
+_BOR_NSLEEP                       00003EFF
+_BOR_OFF                          00003CFF
+_BOR_ON                           00003FFF
+_BOR_SBODEN                       00003DFF
+_CONFIG1                          00002007
+_CONFIG2                          00002008
+_CPD_OFF                          00003FFF
+_CPD_ON                           00003F7F
+_CP_OFF                           00003FFF
+_CP_ON                            00003FBF
+_DEBUG_OFF                        00003FFF
+_DEBUG_ON                         00001FFF
+_DEVID1                           00002006
+_EC_OSC                           00003FFB
+_EXTRC                            00003FFF
+_EXTRCIO                          00003FFE
+_EXTRC_OSC_CLKOUT                 00003FFF
+_EXTRC_OSC_NOCLKOUT               00003FFE
+_FCMEN_OFF                        000037FF
+_FCMEN_ON                         00003FFF
+_FOSC_EC                          00003FFB
+_FOSC_EXTRC_CLKOUT                00003FFF
+_FOSC_EXTRC_NOCLKOUT              00003FFE
+_FOSC_HS                          00003FFA
+_FOSC_INTRC_CLKOUT                00003FFD
+_FOSC_INTRC_NOCLKOUT              00003FFC
+_FOSC_LP                          00003FF8
+_FOSC_XT                          00003FF9
+_HS_OSC                           00003FFA
+_IDLOC0                           00002000
+_IDLOC1                           00002001
+_IDLOC2                           00002002
+_IDLOC3                           00002003
+_IESO_OFF                         00003BFF
+_IESO_ON                          00003FFF
+_INTOSC                           00003FFD
+_INTOSCIO                         00003FFC
+_INTRC_OSC_CLKOUT                 00003FFD
+_INTRC_OSC_NOCLKOUT               00003FFC
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 30
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_LP_OSC                           00003FF8
+_LVP_OFF                          00002FFF
+_LVP_ON                           00003FFF
+_MCLRE_OFF                        00003FDF
+_MCLRE_ON                         00003FFF
+_PWRTE_OFF                        00003FFF
+_PWRTE_ON                         00003FEF
+_WDTE_OFF                         00003FF7
+_WDTE_ON                          00003FFF
+_WDT_OFF                          00003FF7
+_WDT_ON                           00003FFF
+_WRT_1FOURTH                      00003BFF
+_WRT_256                          00003DFF
+_WRT_HALF                         000039FF
+_WRT_OFF                          00003FFF
+_XT_OSC                           00003FF9
+__16F887                          00000001
+__CODE_END                        00001FFF
+__CODE_START                      00000000
+__COMMON_RAM_END                  0000007F
+__COMMON_RAM_START                00000070
+__EEPROM_END                      000021FF
+__EEPROM_START                    00002100
+__VECTOR_INT                      00000004
+__VECTOR_RESET                    00000000
+
+
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+0000 : X---XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0040 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0080 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0100 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0140 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0180 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+01C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXX--- ---------------- ----------------
+0200 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXX--- ---------------- ----------------
+0240 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX ---------------- ----------------
+0280 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXX------------ ----------------
+02C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXX--------- ----------------
+0300 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXX------------ ----------------
+0340 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXX--------- ----------------
+2000 : -------X-------- ---------------- ---------------- ----------------
+
+All other memory blocks unused.
+
+Program Memory Words Used:   685
+Program Memory Words Free:  7507
+
+
+Errors   :     0
+Warnings :     2 reported,     0 suppressed
+gpasm-1.4.0 #1107 (Jan  1 2021) cronometro_re   6-13-2026  15:14:35         PAGE 31
+
+
+
+
+Messages :    13 reported,     0 suppressed
+
+
